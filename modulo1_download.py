@@ -50,21 +50,40 @@ def baixar_video_youtube(url_do_video, nome_arquivo="video_original"):
     
     print(f"Iniciando download de: {url_do_video}...")
     
-    # Configurações do yt-dlp
-    ydl_opts = {
+    # Configurações base do yt-dlp
+    ydl_opts_base = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': caminho_completo,
         'quiet': True,              # Suprime output padrão do yt-dlp
         'no_warnings': True,
         'noprogress': True,         # Suprime linhas [download] nativas
         'progress_hooks': [_make_progress_hook()],
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web']
+            }
+        },
     }
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url_do_video])
-        print(f"✅ Download concluído com sucesso! Salvo em: {caminho_completo}")
-        return caminho_completo
-    except Exception as e:
-        print(f"❌ Erro ao baixar o vídeo: {e}")
-        return None
+    # Estratégias de fallback para contornar bloqueio "Sign in to confirm you're not a bot"
+    tentativas = [("sem cookies", ydl_opts_base)]
+    for navegador in ["chrome", "edge", "firefox", "brave", "opera"]:
+        opts = dict(ydl_opts_base)
+        opts['cookiesfrombrowser'] = (navegador,)
+        tentativas.append((f"cookies do {navegador}", opts))
+
+    ultimo_erro = None
+    for descricao, ydl_opts in tentativas:
+        try:
+            if descricao != "sem cookies":
+                print(f"  🔐 Tentando autenticação com {descricao}...")
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url_do_video])
+            print(f"✅ Download concluído com sucesso! Salvo em: {caminho_completo}")
+            return caminho_completo
+        except Exception as e:
+            ultimo_erro = e
+
+    print(f"❌ Erro ao baixar o vídeo: {ultimo_erro}")
+    print("💡 Dica: inicie sessão no YouTube no navegador e volte a tentar.")
+    return None
