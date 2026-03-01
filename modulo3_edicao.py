@@ -998,11 +998,11 @@ def gerar_filtro_zoom_dinamico(intervalos_fala, duracao, face_x_pct, face_y_pct,
     if not intervalos_fala:
         # Mesmo sem intervalos de fala, aplica breathing zoom muito subtil
         # Amplitude reduzida (0.007) e ciclo longo (12s) para evitar tremores
-        breathing = "1.0+0.007*sin(2*PI*on/(12*{fps}))".replace("{fps}", str(int(fps)))
+        breathing = "1.0+0.007*sin(2*PI*on/(12*{fps}))".replace("{fps}", str(fps))
         return (
             f"zoompan=z='{breathing}'"
             f":x='(iw-iw/zoom)*0.5':y='(ih-ih/zoom)*0.5'"
-            f":d=1:s={out_w}x{out_h}:fps={int(fps)}"
+            f":d=1:s={out_w}x{out_h}:fps={fps}"
         )
 
     # Build between conditions para frames de fala
@@ -1020,7 +1020,7 @@ def gerar_filtro_zoom_dinamico(intervalos_fala, duracao, face_x_pct, face_y_pct,
     # Expressão de zoom com smooth lerp (exponential smoothing via pzoom)
     # Breathing muito subtil (±0.007, ciclo 12s) para não tremer
     # Speech zoom suave (+0.12) com rate lento (0.012 ≈ 3-4s para convergir)
-    breathing_base = f"1.0+0.007*sin(2*PI*on/(12*{int(fps)}))"
+    breathing_base = f"1.0+0.007*sin(2*PI*on/(12*{fps}))"
     zoom_expr = (
         f"min(1.15,max(1.0,"
         f"if(eq(on,0),1.0,"
@@ -1034,7 +1034,7 @@ def gerar_filtro_zoom_dinamico(intervalos_fala, duracao, face_x_pct, face_y_pct,
     return (
         f"zoompan=z='{zoom_expr}'"
         f":x='{x_expr}':y='{y_expr}'"
-        f":d=1:s={out_w}x{out_h}:fps={int(fps)}"
+        f":d=1:s={out_w}x{out_h}:fps={fps}"
     )
 
 
@@ -1194,16 +1194,23 @@ def aplicar_edicao_profissional(caminho_video, caminho_ass, caminho_saida, durac
 #  ENCODING HELPERS
 # ════════════════════════════════════════════════════════════
 
-def _encode_com_filtros(caminho_video, caminho_saida, vf=None, filter_complex=None):
+def _encode_com_filtros(caminho_video, caminho_saida, vf=None, filter_complex=None,
+                        duracao_clip=None):
     """
     Codifica o vídeo com NVENC (GPU) ou libx264 (CPU fallback) — qualidade máxima.
     Aceita -vf (filtro simples) OU -filter_complex (grafos com split/overlay).
     Qualidade optimizada para TikTok/Shorts (1080x1920, ~12-20Mbps, AAC 192k).
     """
     if filter_complex:
-        # Injeta resampling assíncrono no áudio para corrigir possível delay
-        # causado por filtros de vídeo com buffering (ex: zoompan)
-        fc_sync = filter_complex + ";[0:a]aresample=async=1000[aout]"
+        # Áudio: reset PTS + fade in/out suave (sincronizado com fades de vídeo)
+        # O delay era causado por fps impreciso no zoompan (int() truncava 29.97→29).
+        # Agora com fps exacto, o áudio mantém-se sincronizado.
+        audio_chain = "[0:a]asetpts=PTS-STARTPTS"
+        if duracao_clip and duracao_clip > 1.0:
+            fade_out_start = max(0, duracao_clip - 0.6)
+            audio_chain += f",afade=t=in:st=0:d=0.4,afade=t=out:st={fade_out_start:.2f}:d=0.6"
+        audio_chain += "[aout]"
+        fc_sync = filter_complex + ";" + audio_chain
         filtro_args = ['-filter_complex', fc_sync, '-map', '[out]', '-map', '[aout]']
     elif vf:
         filtro_args = ['-vf', vf]
@@ -1219,7 +1226,6 @@ def _encode_com_filtros(caminho_video, caminho_saida, vf=None, filter_complex=No
         '-maxrate', '20M', '-bufsize', '40M',
         '-bf:v', '3', '-g', '60', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
-        '-async', '1',
         '-movflags', '+faststart', '-y', caminho_saida
     ]
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
@@ -1236,7 +1242,6 @@ def _encode_com_filtros(caminho_video, caminho_saida, vf=None, filter_complex=No
         '-maxrate', '20M', '-bufsize', '40M',
         '-threads', '0', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
-        '-async', '1',
         '-movflags', '+faststart', '-y', caminho_saida
     ]
     res2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=900)
@@ -1286,8 +1291,13 @@ def _encode_com_filtros_2in(caminho_video, caminho_video2, caminho_saida,
     Input [0] = main video (audio), Input [1] = satisfying video (sem audio, loopado).
     Qualidade máxima TikTok.
     """
-    # Injeta sincronização de áudio no filter_complex (corrige delay causado por zoompan)
-    fc_sync = filter_complex + ";[0:a]aresample=async=1000[aout2]"
+    # Áudio: reset PTS + fade in/out suave (delay corrigido pelo fps exacto no zoompan)
+    audio_chain = "[0:a]asetpts=PTS-STARTPTS"
+    if duracao and duracao > 1.0:
+        fade_out_start = max(0, duracao - 0.6)
+        audio_chain += f",afade=t=in:st=0:d=0.4,afade=t=out:st={fade_out_start:.2f}:d=0.6"
+    audio_chain += "[aout2]"
+    fc_sync = filter_complex + ";" + audio_chain
 
     # ── NVENC ──
     cmd = [
@@ -1302,7 +1312,6 @@ def _encode_com_filtros_2in(caminho_video, caminho_video2, caminho_saida,
         '-maxrate', '20M', '-bufsize', '40M',
         '-bf:v', '3', '-g', '60', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
-        '-async', '1',
         '-movflags', '+faststart', '-y', caminho_saida
     ]
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
@@ -1323,7 +1332,6 @@ def _encode_com_filtros_2in(caminho_video, caminho_video2, caminho_saida,
         '-maxrate', '20M', '-bufsize', '40M',
         '-threads', '0', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
-        '-async', '1',
         '-movflags', '+faststart', '-y', caminho_saida
     ]
     res2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=1200)
@@ -1445,7 +1453,8 @@ def _aplicar_edicao_split(caminho_video, caminho_ass, caminho_saida,
     parts.append(f"[_stk]{','.join(efx)}[out]")
     fc = ';'.join(parts)
 
-    return _encode_com_filtros(caminho_video, caminho_saida, filter_complex=fc)
+    return _encode_com_filtros(caminho_video, caminho_saida, filter_complex=fc,
+                               duracao_clip=duracao_clip)
 
 
 # ════════════════════════════════════════════════════════════
@@ -1552,12 +1561,6 @@ def _aplicar_edicao_standard(caminho_video, caminho_ass, caminho_saida,
             "eq=contrast=1.05:brightness=0.01:saturation=1.15:gamma=1.02",
             # Sharpen adaptativo (nitidez profissional)
             "unsharp=5:5:0.6:5:5:0.0",
-            # Punch entry flash (flash branco 0.15s no início)
-            "fade=t=in:st=0:d=0.15:color=white",
-            # Fade in normal (preto, mais longo)
-            "fade=t=in:st=0.15:d=0.25:color=black",
-            # Fade out suave
-            f"fade=t=out:st={fade_out:.2f}:d=0.6:color=black",
         ]
         parts.append(f"[{zoom_label}]{','.join(efx_main)}[_main_out]")
 
@@ -1590,6 +1593,12 @@ def _aplicar_edicao_standard(caminho_video, caminho_ass, caminho_saida,
             f"drawbox=x=0:y={bar_y}:w=iw:h={BAR_H}:color=0x1a1a2e@1.0:t=fill",
             f"drawbox=x=0:y={bar_y}:w=iw:h=2:color=0x6c5ce7@0.8:t=fill",
             f"drawbox=x=0:y={bar_y+BAR_H-2}:w=iw:h=2:color=0x6c5ce7@0.8:t=fill",
+            # Punch entry flash (flash branco 0.15s no início)
+            "fade=t=in:st=0:d=0.15:color=white",
+            # Fade in normal (preto, mais longo)
+            "fade=t=in:st=0.15:d=0.25:color=black",
+            # Fade out suave
+            f"fade=t=out:st={fade_out:.2f}:d=0.6:color=black",
         ]
         if caminho_ass and os.path.exists(caminho_ass):
             ass_path = os.path.abspath(caminho_ass).replace('\\', '/').replace(':', '\\:')
@@ -1666,7 +1675,8 @@ def _aplicar_edicao_standard(caminho_video, caminho_ass, caminho_saida,
             efx.append(f"subtitles='{ass_path}'")
         parts.append(f"[{current_label}]{','.join(efx)}[out]")
         fc = ';'.join(parts)
-        return _encode_com_filtros(caminho_video, caminho_saida, filter_complex=fc)
+        return _encode_com_filtros(caminho_video, caminho_saida, filter_complex=fc,
+                                   duracao_clip=duracao_clip)
 
 
 # ════════════════════════════════════════════════════════════
@@ -1675,91 +1685,134 @@ def _aplicar_edicao_standard(caminho_video, caminho_ass, caminho_saida,
 
 def aplicar_loop_infinito(caminho_entrada, caminho_saida, duracao_clip, xfade_dur=2.0):
     """
-    Aplica um loop infinito seamless com qualidade de topo mundial.
+    Aplica um loop infinito MATEMATICAMENTE PERFEITO.
 
-    Quando a plataforma (TikTok, Reels, Shorts) faz replay automático,
-    a transição fim→início é tão suave que o viewer não percebe o corte.
+    Técnica correcta (frame-exact seamless loop):
+    ─────────────────────────────────────────────
+    Seja D = duração do clip original, X = duração do crossfade.
 
-    Técnica World-Class:
-      - Crossfade dissolve de 2s (mais longo = mais smooth)
-      - Audio crossfade exponencial (ducking natural)
-      - Tenta múltiplas transições: smoothup > dissolve > fade
-      - O output tem a MESMA duração do input
-      - Encoding premium (CRF 16 / CQ 18)
+    Output = clip[X → D-X]  (conteúdo puro, sem fades nas bordas)
+           + crossfade(clip[D-X → D] → clip[0 → X])   (dissolve no final)
+    Output duration = D - X
+
+    ┌──────────────────────────────────────────────────────┐
+    │ clip original │ X │ conteúdo puro D-2X │ X │ X     │
+    │               ↑                         ↑crossfade  │
+    │           início output              início↓fim xfade│
+    └──────────────────────────────────────────────────────┘
+
+    Resultado:
+      • Último frame do output = clip[X]  ← 100% clip início pós-crossfade
+      • Primeiro frame do output = clip[X] ← exactamente igual
+      • Ao fazer replay a plataforma volta a t=0 = clip[X] → sem corte visível
+      • Áudio segue a mesma lógica (exponential crossfade)
+
+    Encoding premium (CRF 16 / CQ 16, high profile, AAC 192k).
     """
     try:
-        # Garante duração mínima para o crossfade
-        xfade_dur = min(xfade_dur, duracao_clip * 0.15)  # Máximo 15% do clip
+        # ── Limites do crossfade ──────────────────────────────────────────
+        # Precisa de D > 2*X para haver conteúdo puro no meio.
+        # Máximo: 20% do clip ou 3s (o que for menor).
+        xfade_dur = min(xfade_dur, duracao_clip * 0.20, 3.0)
         xfade_dur = max(0.5, xfade_dur)
-        offset = max(0.1, duracao_clip - xfade_dur)
 
-        # Lista de transições a tentar (da mais elegante à mais simples)
+        # Garante que D > 2*X (mínimo 0.5s de conteúdo puro no meio)
+        if duracao_clip < 2 * xfade_dur + 0.5:
+            xfade_dur = max(0.2, (duracao_clip - 0.5) / 2)
+
+        X  = xfade_dur
+        D  = duracao_clip
+
+        # ── Pontos-chave (todos em segundos do clip ORIGINAL) ─────────────
+        # vmain = clip[X : D]  →  duração = D-X
+        # vstart = clip[0 : X] →  duração = X  (o início que vai "entrar" no fim)
+        # xfade offset dentro de vmain = (D-X) - X = D-2X
+        vmain_dur  = D - X                # duração de vmain
+        xfade_offset = max(0.05, D - 2 * X)  # início do crossfade dentro de vmain
+
+        print(f"  🔁 Loop: D={D:.2f}s  X={X:.2f}s  "
+              f"conteúdo_puro={xfade_offset:.2f}s  output={vmain_dur:.2f}s")
+
+        # Lista de transições a tentar (da mais elegante para a mais simples)
         transitions = ["smoothup", "dissolve", "fade"]
 
         for transition_name in transitions:
-            filter_complex = (
-                f"[0:v]split[va][vb];"
-                f"[vb]trim=0:{xfade_dur:.3f},setpts=PTS-STARTPTS[vloop];"
-                f"[va][vloop]xfade=transition={transition_name}:duration={xfade_dur:.3f}:offset={offset:.3f}[vout];"
-                f"[0:a]asplit[aa][ab];"
-                f"[ab]atrim=0:{xfade_dur:.3f},asetpts=PTS-STARTPTS[aloop];"
-                f"[aa][aloop]acrossfade=d={xfade_dur:.3f}:c1=exp:c2=exp[aout]"
+            # ── FILTER COMPLEX ────────────────────────────────────────────
+            # Vídeo:
+            #   [vmain]  = clip[X:D]  (split 1 — conteúdo principal)
+            #   [vstart] = clip[0:X]  (split 2 — início do clip para entrar no crossfade)
+            #   xfade a partir de xfade_offset dentro de vmain, duração X
+            #   output = vmain[:xfade_offset] + dissolve(vmain[xfade_offset:] ↗ vstart) = D-X total
+            #
+            # Áudio: mesma lógica com acrossfade
+            fc = (
+                f"[0:v]split=2[_vsplit1][_vsplit2];"
+
+                # vmain: clip[X → D], duração = D-X
+                f"[_vsplit1]trim=start={X:.4f}:end={D:.4f},"
+                f"setpts=PTS-STARTPTS[_vmain];"
+
+                # vstart: clip[0 → X], duração = X  (loop-back intro)
+                f"[_vsplit2]trim=start=0:end={X:.4f},"
+                f"setpts=PTS-STARTPTS[_vstart];"
+
+                # Crossfade: vmain → vstart, começa em xfade_offset dentro de vmain
+                f"[_vmain][_vstart]xfade=transition={transition_name}"
+                f":duration={X:.4f}:offset={xfade_offset:.4f}[vout];"
+
+                # Áudio: mesma divisão
+                f"[0:a]asplit=2[_asplit1][_asplit2];"
+
+                f"[_asplit1]atrim=start={X:.4f}:end={D:.4f},"
+                f"asetpts=PTS-STARTPTS[_amain];"
+
+                f"[_asplit2]atrim=start=0:end={X:.4f},"
+                f"asetpts=PTS-STARTPTS[_astart];"
+
+                # acrossfade exponencial (ducking natural)
+                f"[_amain][_astart]acrossfade=d={X:.4f}:c1=exp:c2=exp[aout]"
             )
 
-            # Tenta NVENC primeiro
+            # ── NVENC (GPU) ───────────────────────────────────────────────
             cmd_nvenc = [
-                'ffmpeg',
-                '-i', caminho_entrada,
-                '-filter_complex', filter_complex,
-                '-map', '[vout]',
-                '-map', '[aout]',
+                'ffmpeg', '-i', caminho_entrada,
+                '-filter_complex', fc,
+                '-map', '[vout]', '-map', '[aout]',
                 '-c:v', 'h264_nvenc',
-                '-preset', 'p5',
-                '-profile:v', 'high',
-                '-rc:v', 'vbr',
-                '-cq:v', '18',
-                '-b:v', '0',
-                '-maxrate', '12M',
-                '-bufsize', '24M',
+                '-preset', 'p5', '-profile:v', 'high',
+                '-rc:v', 'vbr', '-cq:v', '16', '-b:v', '0',
+                '-maxrate', '14M', '-bufsize', '28M',
                 '-pix_fmt', 'yuv420p',
-                '-c:a', 'aac',
-                '-b:a', '192k',
-                '-ar', '48000',
-                '-movflags', '+faststart',
-                '-y',
-                caminho_saida
+                '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+                '-movflags', '+faststart', '-y', caminho_saida
             ]
-
             res = subprocess.run(cmd_nvenc, capture_output=True, text=True, timeout=300)
-            if res.returncode == 0:
-                print(f"  🔁 Loop infinito seamless ({transition_name}, NVENC) — {xfade_dur:.1f}s crossfade")
+            if res.returncode == 0 and os.path.exists(caminho_saida) and os.path.getsize(caminho_saida) > 1000:
+                print(f"  🔁 Loop perfeito ({transition_name}, NVENC) "
+                      f"— {X:.1f}s dissolve · output {vmain_dur:.1f}s")
                 return True
 
-            # Fallback libx264
+            # ── libx264 fallback ──────────────────────────────────────────
             cmd_x264 = [
-                'ffmpeg',
-                '-i', caminho_entrada,
-                '-filter_complex', filter_complex,
-                '-map', '[vout]',
-                '-map', '[aout]',
+                'ffmpeg', '-i', caminho_entrada,
+                '-filter_complex', fc,
+                '-map', '[vout]', '-map', '[aout]',
                 '-c:v', 'libx264',
-                '-preset', 'slow',
-                '-crf', '16',
-                '-profile:v', 'high',
-                '-threads', '0',
-                '-pix_fmt', 'yuv420p',
-                '-c:a', 'aac',
-                '-b:a', '192k',
-                '-ar', '48000',
-                '-movflags', '+faststart',
-                '-y',
-                caminho_saida
+                '-preset', 'slow', '-crf', '16',
+                '-profile:v', 'high', '-level', '4.2',
+                '-threads', '0', '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+                '-movflags', '+faststart', '-y', caminho_saida
             ]
-
             res2 = subprocess.run(cmd_x264, capture_output=True, text=True, timeout=600)
-            if res2.returncode == 0:
-                print(f"  🔁 Loop infinito seamless ({transition_name}, x264) — {xfade_dur:.1f}s crossfade")
+            if res2.returncode == 0 and os.path.exists(caminho_saida) and os.path.getsize(caminho_saida) > 1000:
+                print(f"  🔁 Loop perfeito ({transition_name}, x264) "
+                      f"— {X:.1f}s dissolve · output {vmain_dur:.1f}s")
                 return True
+
+            # ── Diagnóstico se falhou ─────────────────────────────────────
+            stderr_preview = (res2.stderr or res.stderr or "")[-400:]
+            print(f"  ⚠️  Transição '{transition_name}' falhou: {stderr_preview[-200:]}")
 
         print(f"  ⚠️ Loop infinito falhou com todas as transições")
         return False
