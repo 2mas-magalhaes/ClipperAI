@@ -26,7 +26,7 @@ def main():
     # - Uma entrevista/debate
     # - Um streamer português
     
-    url_teste = "https://www.youtube.com/watch?v=63TYuphVJmk"  # Testando com novo vídeo
+    url_teste = "https://www.youtube.com/watch?v=67M8fQVI250"  # Testando com novo vídeo
     
     # ============================================
     # ETAPA 1: DOWNLOAD

@@ -1,6 +1,8 @@
-@echo off
-chcp 65001 >nul
-set PYTHONIOENCODING=utf-8
-set KMP_DUPLICATE_LIB_OK=TRUE
-call "%~dp0venv\Scripts\activate.bat"
-python main.py
+PS E:\VScode\ClipAI> $env:PYTHONIOENCODING = "utf-8"; .\venv                       
+>> .\venv\Scripts\python.exe app.py
+
+PS E:\VScode\ClipAI> $env:PYTHONIOENCODING = "utf-8"; .\venv                       
+>> .\venv\Scripts\python.exe main.py
+
+
+E:\VScode\ClipAI\venv\Scripts\python.exe app.py

@@ -217,25 +217,81 @@ def analisar_com_ollama(transcrição):
             return None
         
         print("Analisando vídeo com Llama 2 (GRATUITO, no seu computador)...", flush=True)
-        
-        texto = transcrição["texto_completo"]
-        
-        # Se o texto for muito grande, pega só os primeiros 2000 caracteres
-        if len(texto) > 2000:
-            texto = texto[:2000] + "..."
-        
-        # Prompt simplificado para melhor parsing
-        prompt = f"""Você é um editor de vídeos especializado em criar content viral para TikTok.
 
-Transcrição:
-{texto}
+        INTRO_SKIP_SEG = 120  # ignora os primeiros 2 min (intro/apresentação)
+        CHAR_LIMIT      = 20000  # aumentado para dar mais contexto ao Llama
 
-Identifique 3-4 melhores momentos de 30-60 segundos que viralizariam.
+        # ── Constrói transcrição com timestamps, pulando a intro ──
+        # Formato: "[MM:SS] texto do segmento"
+        # Dá ao Llama contexto temporal real para escolher momentos precisos.
+        segmentos_filtrados = [
+            s for s in (transcrição.get("segmentos") or [])
+            if float(s.get("inicio", 0)) >= INTRO_SKIP_SEG
+        ]
 
-RESPONDA APENAS EM JSON (um item por linha):
-{{"titulo":"Título 1", "razao":"Por quê", "transcript":"Trecho 1"}}
-{{"titulo":"Título 2", "razao":"Por quê", "transcript":"Trecho 2"}}
-{{"titulo":"Título 3", "razao":"Por quê", "transcript":"Trecho 3"}}"""
+        if segmentos_filtrados:
+            linhas_transcript = []
+            for s in segmentos_filtrados:
+                t = float(s.get("inicio", 0))
+                mm, ss = int(t // 60), int(t % 60)
+                linhas_transcript.append(f"[{mm:02d}:{ss:02d}] {s.get('texto', '').strip()}")
+            texto_timed = "\n".join(linhas_transcript)
+        else:
+            # fallback: texto plano sem timestamps, já a saltar os primeiros 2 min
+            texto_plano = transcrição["texto_completo"]
+            # corta aproximadamente 2 min: ~150 palavras/min × 2 = 300 palavras
+            palavras = texto_plano.split()
+            texto_timed = " ".join(palavras[300:]) if len(palavras) > 300 else texto_plano
+
+        if len(texto_timed) > CHAR_LIMIT:
+            texto_timed = texto_timed[:CHAR_LIMIT] + "\n[... transcript truncated ...]"
+
+        # Prompt focado em potencial viral com critérios claros de inclusão/exclusão
+        prompt = f"""You are a world-class short-form video editor and retention specialist who has optimized countless viral videos on TikTok, Instagram Reels and YouTube Shorts. Your expertise: identifying moments with MAXIMUM RETENTION POWER through pacing, energy escalation, and psychological hooks.
+
+The transcript below ALREADY skips the first 2 minutes (intro). Each line shows the timestamp [MM:SS] followed by the spoken words.
+
+TRANSCRIPT:
+{texto_timed}
+
+---
+
+YOUR TASK:
+Select 5 to 7 clips (30–60 seconds each) with MAXIMAL ENGAGEMENT POTENTIAL. Spread them across different parts of the video — do NOT cluster them all near the beginning.
+
+CRITICAL EDITING OPTIMIZATION FACTORS:
+- ENERGY PEAKS: Prioritize moments where vocal pace ACCELERATES, volume INCREASES, or emotional INTENSITY jumps. These are ZOOM-WORTHY moments (rapid camera movement during peak energy = viewer neuro-lock).
+- RHYTHM & PACING: Look for rapid-fire delivery, lists, contrasts, or quick idea volleys. Fast talking = fast editing = viewer cannot look away.
+- PATTERN BREAKS: Sudden topic shifts, unexpected revelations, or sharp tonal changes. Brain MUST refocus when pattern breaks.
+- OPEN LOOPS: Choose moments that make viewers wonder "wait, what happens next?" Creates irresistible forward momentum.
+
+STRICT EXCLUSION RULES — NEVER select:
+- Sponsor segments, ads, brand deals or product promotions
+- Video intros where the creator greets the audience or introduces themselves
+- Slow, meandering explanations or scene-setting with no payoff
+- Filler content, transitions, "stay tuned" or "subscribe" calls to action
+- Low-energy delivery, long pauses, or conversational drag
+
+STRICT INCLUSION RULES — clip MUST have at least ONE of these:
+1. POLEMIC / CONTROVERSIAL — divisive opinion generating "true vs wrong" comments. High debate energy.
+2. RELATABLE — universal feeling triggering "this is literally me". Drives shares and saves.
+3. SURPRISING / NOVEL — unknown fact or revelation stopping scrollers mid-swipe. Creates saves.
+4. EMOTIONAL PEAK — raw intensity (anger, joy, shock, triumph). Visceral brain engagement = cannot look away.
+5. STRONG HOOK — opening line SO PUNCHY the viewer physically cannot continue scrolling.
+6. RHYTHM & DELIVERY ENERGY — fast-paced, energetic speech with vocal peaks. Optimal for dynamic editing and zoom effects.
+
+For EACH clip, OUTPUT a JSON object on ONE single line with these exact keys:
+{{"titulo":"Punchy title (max 8 words, action-oriented)", "razao":"[trigger] + editing note: suggest zoom/cut/effect if applicable", "transcript":"The exact opening words from the transcript for this clip"}}
+
+Example with editing guidance:
+{{"titulo":"Wait, this changes everything", "razao":"[SURPRISING] + High energy delivery - perfect for zoom-in on peak phrase + quick cut transition", "transcript":"[MM:SS] Actually nobody knows..."}}
+
+OUTPUT — respond with ONLY JSON lines, nothing else:
+{{"titulo":"T1", "razao":"[trigger] editing note", "transcript":"[T] words"}}
+{{"titulo":"T2", "razao":"[trigger] editing note", "transcript":"[T] words"}}
+{{"titulo":"T3", "razao":"[trigger] editing note", "transcript":"[T] words"}}
+{{"titulo":"T4", "razao":"[trigger] editing note", "transcript":"[T] words"}}
+{{"titulo":"T5", "razao":"[trigger] editing note", "transcript":"[T] words"}}"""
         
         # Chama o Llama rodando localmente
         print("  ⏳ Aguardando resposta do Llama 2...", flush=True)
