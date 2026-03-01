@@ -5,6 +5,7 @@ Flask app com dashboard, queue de vídeos, gestão de canais e definições.
 
 import os
 import sys
+import logging
 
 # Garantir que o venv correto é usado
 VENV_PYTHON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "venv", "Scripts", "python.exe")
@@ -24,6 +25,14 @@ import database as db
 from worker import worker
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
+
+
+def _silenciar_logs_http():
+    """Silencia logs de acesso HTTP do servidor de desenvolvimento Flask/Werkzeug."""
+    werkzeug_log = logging.getLogger("werkzeug")
+    werkzeug_log.setLevel(logging.ERROR)
+    werkzeug_log.disabled = True
+    app.logger.setLevel(logging.ERROR)
 
 
 def _parse_upload_date(date_str):
@@ -771,5 +780,6 @@ def serve_clip(filename):
 if __name__ == "__main__":
     os.makedirs("data", exist_ok=True)
     os.makedirs("downloads/clips_editados", exist_ok=True)
+    _silenciar_logs_http()
     print("\n🚀 ClipAI Interface em http://localhost:5000\n")
     app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)

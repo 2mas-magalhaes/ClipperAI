@@ -11,7 +11,7 @@ load_dotenv()
 
 def main():
     print("🤖 Iniciando a Clipadora AI (100% GRATUITA)...")
-    print("💡 Usando Faster-Whisper + Llama 2 (sem custos!)\n")
+    print("💡 Usando Faster-Whisper + Llama 3.1 (sem custos!)\n")
     
     # Verifica GPU
     device, gpu_disponivel, info_gpu = verificar_gpu()
@@ -57,8 +57,14 @@ def main():
     
     print(f"  📊 Transcrição obtida: {len(transcrição.get('segmentos', []))} segmentos", flush=True)
     
-    # 2.3 Analisa com Llama 2 (GRATUITO)
-    print("\n  🧠 Enviando para Llama 2 (pode demorar 30-120s)...", flush=True)
+    # Passa o link original para a análise (para copy YouTube)
+    try:
+        transcrição["video_url"] = url_teste
+    except Exception:
+        pass
+
+    # 2.3 Analisa com Llama (GRATUITO)
+    print("\n  🧠 Enviando para o modelo Ollama (pode demorar 30-120s)...", flush=True)
     clipes_recomendados = analisar_com_ollama(transcrição)
     if not clipes_recomendados:
         print("⚠️ Erro na análise. Abortando.")

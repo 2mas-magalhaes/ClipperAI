@@ -83,6 +83,29 @@ def _validar_video(caminho):
         return False, f"Erro na validação: {e}"
 
 
+def _max_altura_disponivel(url_video, ydl_opts):
+    """
+    Consulta metadados sem descarregar e devolve a maior resolução de vídeo disponível
+    para as opções atuais do yt-dlp (cookies/client/headers).
+    """
+    try:
+        opts_info = dict(ydl_opts)
+        opts_info['skip_download'] = True
+        opts_info['quiet'] = True
+        opts_info['no_warnings'] = True
+        with yt_dlp.YoutubeDL(opts_info) as ydl:
+            info = ydl.extract_info(url_video, download=False)
+        formatos = info.get('formats', []) if info else []
+        alturas = [
+            int(f.get('height', 0) or 0)
+            for f in formatos
+            if f.get('vcodec') not in (None, 'none')
+        ]
+        return max(alturas) if alturas else 0
+    except Exception:
+        return 0
+
+
 def baixar_video_youtube(url_do_video, nome_arquivo="video_original"):
     """
     Baixa um vídeo do YouTube na melhor qualidade possível (1080p+).
@@ -147,17 +170,20 @@ def baixar_video_youtube(url_do_video, nome_arquivo="video_original"):
     }
 
     # Estratégias de fallback progressivas:
-    # 1. Cookies de browser (obtêm formatos DASH 1080p)
-    # 2. android client (bypassa age-gate, pode ser <1080p)
-    # 3. mweb client (mobile web, outro bypass)
+    # 1. Sem cookies (normalmente dá DASH 1080p)
+    # 2. Cookies de browser (opera/chrome/edge...)
+    # 3. android/mweb para bypass de age-gate (pode limitar resolução)
     # 4. formato simples (último recurso)
     tentativas = []
+
+    # Sem cookies primeiro (prioriza qualidade alta)
+    opts_sem_cookies = dict(ydl_opts_base)
+    tentativas.append(("sem cookies (HQ)", opts_sem_cookies))
 
     # Cookies primeiro — é o que dá acesso a formatos 1080p DASH
     for navegador in ["opera", "chrome", "edge", "firefox", "brave"]:
         opts = dict(ydl_opts_base)
         opts['cookiesfrombrowser'] = (navegador,)
-        opts['extractor_args'] = {'youtube': {'player_client': ['web', 'android']}}
         tentativas.append((f"cookies do {navegador}", opts))
 
     # Android client sem cookies (bypassa age-gate, mas pode ser 360p)
@@ -179,8 +205,16 @@ def baixar_video_youtube(url_do_video, nome_arquivo="video_original"):
     for descricao, ydl_opts in tentativas:
         try:
             _limpar_parciais(caminho_completo)  # Limpa parciais de tentativas anteriores
-            if descricao != "sem cookies":
+            if not descricao.startswith("sem cookies"):
                 print(f"  🔐 Tentando autenticação com {descricao}...")
+
+            # Pré-checagem: não gastar banda se esta estratégia só oferece baixa resolução
+            max_h = _max_altura_disponivel(url_do_video, ydl_opts)
+            if max_h and max_h < 720:
+                print(f"  ⚠️ {descricao}: máximo disponível {max_h}p, a tentar próximo método...")
+                ultimo_erro = Exception(f"Resolução máxima baixa na estratégia '{descricao}': {max_h}p")
+                continue
+
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url_do_video])
 

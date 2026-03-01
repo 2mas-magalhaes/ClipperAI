@@ -23,7 +23,7 @@ def _default_db():
         "review_clips": [],
         "posted_videos": [],
         "settings": {
-            "ollama_model": "llama2",
+            "ollama_model": "llama3.1",
             "whisper_model_gpu": "medium",
             "whisper_model_cpu": "small",
             "default_channel_id": None,
@@ -53,6 +53,14 @@ def _load():
             for sk, sv in defaults["settings"].items():
                 if sk not in db["settings"]:
                     db["settings"][sk] = sv
+
+            # Migração do default antigo: se ainda estiver em llama2 (default legacy), muda para llama3.1
+            # Não mexe se o utilizador já escolheu outro modelo.
+            try:
+                if (db.get("settings") or {}).get("ollama_model") == "llama2":
+                    db["settings"]["ollama_model"] = "llama3.1"
+            except Exception:
+                pass
             return db
     except Exception:
         return _default_db()

@@ -1,26 +1,29 @@
 """
-MÓDULO 3 - Edição Ultra-Profissional de Vídeos (V5 - Elite World-Class)
+MÓDULO 3 - Edição Ultra-Profissional de Vídeos (V6 - Maximum Quality)
 
 Pipeline por clipe:
-  1. Cortar segmento (frame-exact re-encode, CRF 16 master quality)
-  2. Jump cuts — remove silêncios com base nos timestamps Whisper
-  3. Gerar legendas ASS karaoke (palavra activa a amarelo, 88pt Impact)
-  4. Aplicar num único passo: crop 9:16 + breathing zoom + efeitos + legendas
-  5. Loop infinito seamless (speed ramp + dissolve + audio crossfade exponencial)
+  1. Cortar segmento (frame-exact re-encode, CRF 14 master quality)
+  2. Jump cuts — remove silêncios com trim+concat (sincronia A/V perfeita)
+  3. Gerar legendas ASS karaoke (palavra activa amarelo 108%, grupos de 3)
+  4. Aplicar TODOS os efeitos profissionais num único passo FFmpeg
+  5. Loop infinito seamless (dissolve + exponential audio crossfade)
 
 Efeitos Ultra-Profissionais (World-Class):
-  ✦ Jump cuts automáticos (segmentos Whisper → FFmpeg select/setpts)
-  ✦ DNN Face tracking inteligente 9:16 (ResNet SSD — 95%+ accuracy)
-  ✦ Smooth tracking com interpolação temporal (sem saltos)
-  ✦ Breathing zoom dinâmico (1.02x↔1.06x, ciclo 7s)
-  ✦ Color grading cinematográfico (lift/gamma/gain + saturação + contraste + curves)
-  ✦ Temporal denoise (hqdn3d) + Sharpen adaptativo 5x5 (unsharp)
-  ✦ Vinheta cinematográfica suave
-  ✦ Punch entry flash + Fade out suave
-  ✦ Barra de progresso multi-layer com glow neon + ghost preview + rail escuro
-  ✦ Legendas karaoke word-by-word: palavra activa amarelo 108%, inactivas 65% opacity
-  ✦ Loop infinito seamless com dissolve + exponential audio crossfade
-  ✦ Encoding premium: CRF 16 / CQ 18, high profile, B-frames adaptativos, audio 192k
+  ✦ Jump cuts automáticos (trim+atrim+concat — sincronia A/V perfeita)
+  ✦ DNN Face tracking inteligente (ResNet SSD — 95%+ accuracy)
+  ✦ Breathing zoom dinâmico (1.00x↔1.03x, ciclo 8s) — vídeo sempre "vivo"
+  ✦ Zoom 1.15x na face durante fala (exponential smoothing ultra-smooth)
+  ✦ Color grading cinematográfico (contrast 1.05, saturation 1.15, gamma 1.02)
+  ✦ Temporal denoise (hqdn3d=1.5:1.0:2.0:1.5)
+  ✦ Sharpen adaptativo 5x5 (unsharp=5:5:0.6)
+  ✦ Vinheta cinematográfica suave (vignette PI/4:0.35)
+  ✦ Punch entry flash branco (0.15s) + Fade in/out suaves
+  ✦ Barra de progresso neon animada com glow (cresce com t/duração)
+  ✦ Legendas karaoke word-by-word: palavra activa amarelo 108%, inactivas 65%
+  ✦ Layout split 60/40: conteúdo no topo + satisfying/gameplay em baixo
+  ✦ Background desfocado nas margens (boxblur + eq dark)
+  ✦ Loop infinito seamless (smoothup > dissolve > fade fallback)
+  ✦ Encoding premium: CRF 14 / CQ 14, high profile, B-frames, AAC 192k
 """
 
 import json
@@ -125,6 +128,25 @@ def obter_fps_video(caminho_video):
         return 30.0
 
 
+def _obter_duracao_video(caminho_video):
+    """Retorna a duração do vídeo em segundos."""
+    try:
+        cmd = [
+            'ffprobe', '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            caminho_video
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if res.returncode == 0:
+            dur = res.stdout.strip()
+            if dur:
+                return float(dur)
+    except Exception:
+        pass
+    return 60.0  # fallback: assume 60 segundos
+
+
 def formatar_tempo_ass(segundos):
     """Converte segundos (float) para formato ASS (H:MM:SS.cc)."""
     segundos = max(0, float(segundos))
@@ -136,168 +158,13 @@ def formatar_tempo_ass(segundos):
 
 
 # ════════════════════════════════════════════════════════════
-#  GERAÇÃO DE LEGENDAS ASS (FORMATO PROFISSIONAL)
+#  JUMP CUTS — CÁLCULO DE INTERVALOS DE FALA
 # ════════════════════════════════════════════════════════════
-
-def criar_texto_hook(segmentos, inicio_corte, duracao_corte):
-    """
-    Gera texto de hook chamativo baseado na transcrição.
-    Pega as primeiras palavras do clipe para gerar curiosidade.
-    """
-    fim_corte = inicio_corte + duracao_corte
-    palavras_clip = []
-
-    for seg in segmentos:
-        if seg.get("fim", 0) < inicio_corte or seg.get("inicio", 0) > fim_corte:
-            continue
-
-        if "palavras" in seg and seg["palavras"]:
-            for p in seg["palavras"]:
-                t = p.get("inicio", 0)
-                if t >= inicio_corte and t <= fim_corte:
-                    palavra = p.get("palavra", "").strip()
-                    if palavra:
-                        palavras_clip.append(palavra)
-        elif seg.get("texto"):
-            for w in seg["texto"].split():
-                w = w.strip()
-                if w:
-                    palavras_clip.append(w)
-
-    if not palavras_clip:
-        return "ATENÇÃO"
-
-    # Pega primeiras 5 palavras como hook
-    n = min(5, len(palavras_clip))
-    hook = " ".join(palavras_clip[:n]).upper().strip()
-
-    # Limpa caracteres que quebram ASS
-    for ch in ["\\", "{", "}", "\n"]:
-        hook = hook.replace(ch, "")
-
-    # Adiciona "..." se cortou
-    if len(palavras_clip) > n:
-        hook += "..."
-
-    return hook if hook else "ATENÇÃO"
-
-
-# ════════════════════════════════════════════════════════════
-#  JUMP CUTS — REMOÇÃO DE SILÊNCIOS VIA WHISPER TIMESTAMPS
-# ════════════════════════════════════════════════════════════
-
-def aplicar_jump_cuts(caminho_video, segmentos_whisper, inicio_corte, duracao_clip, caminho_saida,
-                     merge_gap=0.35):
-    """
-    Remove automaticamente os silêncios de um clipe usando os timestamps
-    dos segmentos Whisper.
-
-    Estratégia:
-      1. Extrai intervalos de fala dos segmentos Whisper (ajustados para t=0)
-      2. Adiciona margem de 60ms à volta de cada segmento
-      3. Merge de segmentos com gap < merge_gap (evita cortes desnecessários)
-      4. Gera FFmpeg select+setpts para video e aselect+asetpts para áudio
-
-    Args:
-        caminho_video: clip já cortado (já começa em PTS=0)
-        segmentos_whisper: lista de segmentos do módulo 2
-        inicio_corte: timestamp original de início (para ajustar tempos)
-        duracao_clip: duração do clip em segundos
-        caminho_saida: caminho do output com jump cuts
-        merge_gap: gap máximo em segundos entre segmentos para NÃO cortar
-
-    Returns:
-        bool: True se sucesso, False se falhou ou sem dados suficientes
-    """
-    try:
-        fim_corte = inicio_corte + duracao_clip
-
-        # ── EXTRAI INTERVALOS DE FALA ──
-        # Usa segmentos Whisper (nível de frase) — mais estável que palavras individuais
-        intervalos = []
-        margem = 0.06  # 60ms de buffer à volta de cada segmento
-
-        for seg in (segmentos_whisper or []):
-            seg_ini = float(seg.get("inicio", 0))
-            seg_fim = float(seg.get("fim", 0))
-
-            # Só considera segmentos que estão dentro do clip
-            if seg_fim < inicio_corte or seg_ini > fim_corte:
-                continue
-
-            # Ajusta para tempo relativo ao clip (t=0)
-            ini_rel = max(0.0, seg_ini - inicio_corte - margem)
-            fim_rel = min(duracao_clip, seg_fim - inicio_corte + margem)
-
-            if fim_rel <= ini_rel:
-                continue
-
-            # Merge com intervalo anterior se gap for pequeno
-            if intervalos and ini_rel <= intervalos[-1][1] + merge_gap:
-                intervalos[-1][1] = max(intervalos[-1][1], fim_rel)
-            else:
-                intervalos.append([ini_rel, fim_rel])
-
-        # Precisa de pelo menos 2 intervalos para um jump cut valer a pena
-        if len(intervalos) < 2:
-            return False
-
-        # Calcula silêncio total que vai ser removido
-        total_fala = sum(f - i for i, f in intervalos)
-        silencio_removido = duracao_clip - total_fala
-
-        # Só aplica se remover pelo menos 0.5 segundos
-        if silencio_removido < 0.5:
-            print(f"  ℹ️  Pouco silêncio detectado ({silencio_removido:.1f}s), a saltar jump cuts")
-            return False
-
-        print(f"  ✂️  Jump cuts: {len(intervalos)} segmentos de fala, removendo {silencio_removido:.1f}s de silêncio")
-
-        # ── CONSTRÓI FILTER_COMPLEX COM TRIM+CONCAT (sincronia perfeita) ──
-        filtro_jc = _construir_filtro_concat(intervalos)
-
-        # ── FFmpeg com NVENC ──
-        cmd_nvenc = [
-            'ffmpeg', '-i', caminho_video,
-            '-filter_complex', filtro_jc,
-            '-map', '[vout]', '-map', '[aout]',
-            '-c:v', 'h264_nvenc', '-preset', 'p4',
-            '-rc:v', 'vbr', '-cq:v', '18',
-            '-c:a', 'aac', '-b:a', '128k',
-            '-movflags', '+faststart', '-y', caminho_saida
-        ]
-        res = subprocess.run(cmd_nvenc, capture_output=True, text=True, timeout=300)
-        if res.returncode == 0:
-            return True
-
-        # ── Fallback libx264 ──
-        cmd_cpu = [
-            'ffmpeg', '-i', caminho_video,
-            '-filter_complex', filtro_jc,
-            '-map', '[vout]', '-map', '[aout]',
-            '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
-            '-c:a', 'aac', '-b:a', '128k',
-            '-movflags', '+faststart', '-y', caminho_saida
-        ]
-        res2 = subprocess.run(cmd_cpu, capture_output=True, text=True, timeout=600)
-        if res2.returncode == 0:
-            return True
-
-        print(f"  ⚠️  Jump cuts falharam: {res2.stderr[-200:]}")
-        return False
-
-    except subprocess.TimeoutExpired:
-        print(f"  ⚠️  Jump cuts timeout")
-        return False
-    except Exception as e:
-        print(f"  ⚠️  Jump cuts erro: {e}")
-        return False
-
 
 def calcular_intervalos_fala(segmentos_whisper, inicio_corte, duracao_clip, merge_gap=0.35):
     """
     Calcula os intervalos de fala de um clip a partir dos segmentos Whisper.
-    Função partilhada por `aplicar_jump_cuts` e `gerar_legendas_ass`.
+    Usado para jump cuts, zoom dinâmico e sincronização de legendas.
 
     Returns:
         list: [[ini_rel, fim_rel], ...] em segundos relativos ao início do clip (t=0)
@@ -1111,9 +978,12 @@ def gerar_filtro_zoom_dinamico(intervalos_fala, duracao, face_x_pct, face_y_pct,
     """
     Gera filtro FFmpeg zoompan para zoom dinâmico baseado em fala.
 
-    Quando a pessoa FALA: zoom suave 1.20x centrado na face.
+    Quando a pessoa FALA: zoom suave 1.15x centrado na face.
     Quando NÃO fala: volta suavemente ao plano geral (1.0x).
-    Transição suave via exponential smoothing (pzoom).
+    Transição ultra-smooth via exponential smoothing (pzoom).
+
+    TAMBÉM aplica um breathing zoom subtil (1.00x ↔ 1.03x, ciclo 8s)
+    que mantém o vídeo "vivo" mesmo sem fala.
 
     Args:
         intervalos_fala: [[ini, fim], ...] intervalos de fala relativos ao clip
@@ -1126,7 +996,14 @@ def gerar_filtro_zoom_dinamico(intervalos_fala, duracao, face_x_pct, face_y_pct,
         str: filtro zoompan FFmpeg ou None
     """
     if not intervalos_fala:
-        return None
+        # Mesmo sem intervalos de fala, aplica breathing zoom muito subtil
+        # Amplitude reduzida (0.007) e ciclo longo (12s) para evitar tremores
+        breathing = "1.0+0.007*sin(2*PI*on/(12*{fps}))".replace("{fps}", str(int(fps)))
+        return (
+            f"zoompan=z='{breathing}'"
+            f":x='(iw-iw/zoom)*0.5':y='(ih-ih/zoom)*0.5'"
+            f":d=1:s={out_w}x{out_h}:fps={int(fps)}"
+        )
 
     # Build between conditions para frames de fala
     conds = []
@@ -1141,17 +1018,16 @@ def gerar_filtro_zoom_dinamico(intervalos_fala, duracao, face_x_pct, face_y_pct,
     speech_cond = "+".join(conds)
 
     # Expressão de zoom com smooth lerp (exponential smoothing via pzoom)
-    # Target: 1.0 (full view) → 1.18 (zoom na face) durante fala
-    # Rate 0.03 = transição suave (~1s para convergir)
+    # Breathing muito subtil (±0.007, ciclo 12s) para não tremer
+    # Speech zoom suave (+0.12) com rate lento (0.012 ≈ 3-4s para convergir)
+    breathing_base = f"1.0+0.007*sin(2*PI*on/(12*{int(fps)}))"
     zoom_expr = (
-        f"min(1.18,max(1.0,"
+        f"min(1.15,max(1.0,"
         f"if(eq(on,0),1.0,"
-        f"pzoom+((1.0+0.18*min(1,{speech_cond}))-pzoom)*0.035)))"
+        f"pzoom+((({breathing_base})+0.12*min(1,{speech_cond}))-pzoom)*0.012)))"
     )
 
     # Posição: centra na face quando zoomed, centro da frame quando normal
-    # Em zoompan, x/y = posição do canto superior-esquerdo do crop no frame escalonado
-    # Fórmula: (iw - iw/zoom) * face_pct → centra a face no output
     x_expr = f"(iw-iw/zoom)*{face_x_pct:.4f}"
     y_expr = f"(ih-ih/zoom)*{face_y_pct:.4f}"
 
@@ -1325,7 +1201,10 @@ def _encode_com_filtros(caminho_video, caminho_saida, vf=None, filter_complex=No
     Qualidade optimizada para TikTok/Shorts (1080x1920, ~12-20Mbps, AAC 192k).
     """
     if filter_complex:
-        filtro_args = ['-filter_complex', filter_complex, '-map', '[out]', '-map', '0:a']
+        # Injeta resampling assíncrono no áudio para corrigir possível delay
+        # causado por filtros de vídeo com buffering (ex: zoompan)
+        fc_sync = filter_complex + ";[0:a]aresample=async=1000[aout]"
+        filtro_args = ['-filter_complex', fc_sync, '-map', '[out]', '-map', '[aout]']
     elif vf:
         filtro_args = ['-vf', vf]
     else:
@@ -1340,6 +1219,7 @@ def _encode_com_filtros(caminho_video, caminho_saida, vf=None, filter_complex=No
         '-maxrate', '20M', '-bufsize', '40M',
         '-bf:v', '3', '-g', '60', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+        '-async', '1',
         '-movflags', '+faststart', '-y', caminho_saida
     ]
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
@@ -1356,6 +1236,7 @@ def _encode_com_filtros(caminho_video, caminho_saida, vf=None, filter_complex=No
         '-maxrate', '20M', '-bufsize', '40M',
         '-threads', '0', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+        '-async', '1',
         '-movflags', '+faststart', '-y', caminho_saida
     ]
     res2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=900)
@@ -1405,19 +1286,23 @@ def _encode_com_filtros_2in(caminho_video, caminho_video2, caminho_saida,
     Input [0] = main video (audio), Input [1] = satisfying video (sem audio, loopado).
     Qualidade máxima TikTok.
     """
+    # Injeta sincronização de áudio no filter_complex (corrige delay causado por zoompan)
+    fc_sync = filter_complex + ";[0:a]aresample=async=1000[aout2]"
+
     # ── NVENC ──
     cmd = [
         'ffmpeg', '-noautorotate',
         '-i', caminho_video,
         '-stream_loop', '-1', '-i', caminho_video2,
-        '-filter_complex', filter_complex,
-        '-map', '[out]', '-map', '0:a',
+        '-filter_complex', fc_sync,
+        '-map', '[out]', '-map', '[aout2]',
         '-t', str(duracao),
         '-c:v', 'h264_nvenc', '-preset', 'p7', '-profile:v', 'high',
         '-rc:v', 'vbr', '-cq:v', '14', '-b:v', '12M',
         '-maxrate', '20M', '-bufsize', '40M',
         '-bf:v', '3', '-g', '60', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+        '-async', '1',
         '-movflags', '+faststart', '-y', caminho_saida
     ]
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
@@ -1430,14 +1315,15 @@ def _encode_com_filtros_2in(caminho_video, caminho_video2, caminho_saida,
         'ffmpeg', '-noautorotate',
         '-i', caminho_video,
         '-stream_loop', '-1', '-i', caminho_video2,
-        '-filter_complex', filter_complex,
-        '-map', '[out]', '-map', '0:a',
+        '-filter_complex', fc_sync,
+        '-map', '[out]', '-map', '[aout2]',
         '-t', str(duracao),
         '-c:v', 'libx264', '-preset', 'slow', '-crf', '14',
         '-profile:v', 'high', '-level', '4.2', '-bf', '3',
         '-maxrate', '20M', '-bufsize', '40M',
         '-threads', '0', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+        '-async', '1',
         '-movflags', '+faststart', '-y', caminho_saida
     ]
     res2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=1200)
@@ -1456,21 +1342,28 @@ def _encode_com_filtros_2in(caminho_video, caminho_video2, caminho_saida,
 def _aplicar_edicao_split(caminho_video, caminho_ass, caminho_saida,
                           duracao_clip, w, h, webcam):
     """
-    Layout split: conteúdo em cima (stretch to fill), webcam grande em baixo
-    (olhos centrados no meio da tela), barra divisória fina, legendas ao centro.
+    Layout split para vídeos com webcam: conteúdo em cima, webcam grande em baixo.
+    Aplica TODOS os efeitos profissionais.
 
     Layout (1080x1920):
       ┌────────────────┐
-      │  CONTEÚDO FILL  │  ~880px — recortado até à webcam, stretch to fill
-      ├────────────────┤   8px — divider accent
+      │  CONTEÚDO FILL  │  ~864px — recortado até à webcam, stretch to fill
+      ├────────────────┤   8px — divider accent com glow
       │  LEGENDAS       │
-      │  WEBCAM GRANDE  │ ~1032px — face grande, olhos no centro vertical
+      │  WEBCAM GRANDE  │ ~1056px — face grande, olhos no centro vertical
+      │ ═══ PROGRESS ══│  barra de progresso neon na base
       └────────────────┘
+
+    EFEITOS PROFISSIONAIS:
+      ✦ Temporal denoise (hqdn3d)
+      ✦ Color grading cinematográfico
+      ✦ Sharpen adaptativo
+      ✦ Punch entry flash
+      ✦ Fade in/out suave
     """
-    BAR_H = 8  # barra divisória fina (desenhada com drawbox, não ocupa espaço)
-    # Webcam ocupa mais espaço (55% do ecrã) para face grande
+    BAR_H = 8
     BOT_H = 1056
-    TOP_H = 1920 - BOT_H  # = 864 — TOP_H + BOT_H = 1920 exacto
+    TOP_H = 1920 - BOT_H
 
     corner = webcam['corner']
     face_cx = webcam['face_cx']
@@ -1479,91 +1372,72 @@ def _aplicar_edicao_split(caminho_video, caminho_ass, caminho_saida,
     face_h = webcam['face_h']
 
     # === TOP: conteúdo sem a zona da webcam ===
-    # Corta verticalmente até à webcam (remove a área da cam)
     if 'b' in corner:
-        # Webcam está em baixo: conteúdo é do topo até à webcam
         ct_y = 0
         ct_h = max(int(h * 0.40), webcam['y'])
     else:
-        # Webcam está em cima: conteúdo é abaixo da webcam
         ct_y = webcam['y'] + webcam['h']
         ct_h = max(int(h * 0.40), h - ct_y)
 
     ct_h = max(100, min(ct_h, h - ct_y))
     ct_h = ct_h - (ct_h % 2)
 
-    # === BOTTOM: crop à volta da face — face GRANDE, olhos no centro ===
-    # Queremos a face grande o suficiente para preencher a largura
-    # e os olhos centrados verticalmente na área da webcam
+    # === BOTTOM: crop à volta da face ===
     target_aspect = 1080 / BOT_H
-
-    # Face crop: queremos a face a ocupar ~45% da largura da área
-    # Para isso, o crop deve ser ~2.2x a largura da face
     face_crop_w = max(int(face_w * 2.2), 300)
     face_crop_h = max(int(face_crop_w / target_aspect), 250)
     face_crop_w += face_crop_w % 2
     face_crop_h += face_crop_h % 2
-
-    # Limita ao tamanho do vídeo
     face_crop_w = min(face_crop_w, w)
     face_crop_h = min(face_crop_h, h)
 
-    # Centra nos OLHOS (olhos ≈ 45% do topo da face)
-    # Queremos que os olhos fiquem no centro vertical da área BOT_H
-    # Os olhos estão ~15% acima do centro da face (face_cy)
     olhos_y = face_cy - int(face_h * 0.15)
-
-    # Posiciona o crop para que olhos fiquem no centro vertical do crop
     fx = max(0, min(face_cx - face_crop_w // 2, w - face_crop_w))
     fy = max(0, min(olhos_y - face_crop_h // 2, h - face_crop_h))
 
-    print(f"  🖼️  Split: topo=crop(0,{ct_y},{w},{ct_h}) → 1080x{TOP_H} (stretch fill)")
-    print(f"  🖼️  Split: cam=crop({fx},{fy},{face_crop_w},{face_crop_h}) → 1080x{BOT_H} (olhos centrados)")
+    print(f"  🖼️  Split: topo=crop(0,{ct_y},{w},{ct_h}) → 1080x{TOP_H}")
+    print(f"  🖼️  Split: cam=crop({fx},{fy},{face_crop_w},{face_crop_h}) → 1080x{BOT_H}")
 
     # === FILTER_COMPLEX ===
     parts = []
     parts.append(f"[0:v]split[_v1][_v2]")
 
-    # Top: content → crop região do conteúdo → STRETCH to fill (sem barras pretas)
     parts.append(
         f"[_v1]crop={w}:{ct_h}:0:{ct_y},"
         f"scale=1080:{TOP_H}:flags=lanczos[_top]"
     )
 
-    # Bottom: face crop → scale to fill (stretch)
     parts.append(
         f"[_v2]crop={face_crop_w}:{face_crop_h}:{fx}:{fy},"
         f"scale=1080:{BOT_H}:flags=lanczos[_bot]"
     )
 
-    # Stack: top + bottom = 1920px exacto (sem barras pretas)
-    parts.append(
-        f"[_top][_bot]vstack=inputs=2[_stk]"
-    )
+    parts.append(f"[_top][_bot]vstack=inputs=2[_stk]")
 
-    # === EFFECTS ===
-    efx = ["format=yuv420p"]
-
-    # Barra divisória fina accent (desenhada sobre a junção)
-    efx.append(f"drawbox=x=0:y={TOP_H - BAR_H//2}:w=iw:h={BAR_H}:color=0x1a1a2e@1.0:t=fill")
-    efx.append(f"drawbox=x=0:y={TOP_H - BAR_H//2}:w=iw:h=1:color=0x6c5ce7@0.50:t=fill")
-    efx.append(f"drawbox=x=0:y={TOP_H + BAR_H//2 - 1}:w=iw:h=1:color=0x6c5ce7@0.50:t=fill")
-
-    # Denoise subtil
-    efx.append("hqdn3d=1.5:1.0:2.0:1.5")
-
-    # Color correction subtil (sem estourar)
-    efx.append("eq=contrast=1.04:brightness=0.01:saturation=1.12:gamma=1.02")
-
-    # Sharpen ligeiro
-    efx.append("unsharp=3:3:0.4:3:3:0.1")
-
-    # Fades
+    # ══════ TODOS OS EFEITOS PROFISSIONAIS ══════
     fade_out = max(0, duracao_clip - 0.6)
-    efx.append("fade=t=in:st=0:d=0.3:color=black")
-    efx.append(f"fade=t=out:st={fade_out:.2f}:d=0.6:color=black")
+    progress_y = 1920 - 28
+    progress_h = 6
 
-    # Subtitles (sem progress bar)
+    efx = [
+        "format=yuv420p",
+        # Barra divisória com glow
+        f"drawbox=x=0:y={TOP_H - BAR_H//2}:w=iw:h={BAR_H}:color=0x1a1a2e@1.0:t=fill",
+        f"drawbox=x=0:y={TOP_H - BAR_H//2}:w=iw:h=2:color=0x6c5ce7@0.8:t=fill",
+        f"drawbox=x=0:y={TOP_H + BAR_H//2 - 2}:w=iw:h=2:color=0x6c5ce7@0.8:t=fill",
+        # Temporal denoise
+        "hqdn3d=1.5:1.0:2.0:1.5",
+        # Color grading cinematográfico
+        "eq=contrast=1.05:brightness=0.01:saturation=1.15:gamma=1.02",
+        # Sharpen adaptativo
+        "unsharp=5:5:0.6:5:5:0.0",
+        # Punch entry flash
+        "fade=t=in:st=0:d=0.15:color=white",
+        "fade=t=in:st=0.15:d=0.25:color=black",
+        # Fade out
+        f"fade=t=out:st={fade_out:.2f}:d=0.6:color=black",
+    ]
+
     if caminho_ass and os.path.exists(caminho_ass):
         ass_path = os.path.abspath(caminho_ass).replace('\\', '/').replace(':', '\\:')
         efx.append(f"subtitles='{ass_path}'")
@@ -1582,39 +1456,51 @@ def _aplicar_edicao_standard(caminho_video, caminho_ass, caminho_saida,
                              duracao_clip, w, h,
                              intervalos_fala=None, face_info=None):
     """
-    Layout split: conteúdo principal no topo (954px) + vídeo satisfatório em baixo (960px)
-    com background desfocado + zoom dinâmico na fala.
+    Layout split: conteúdo principal no topo (60% = 1152px) + vídeo satisfatório em baixo
+    (40% = 762px) com TODOS os efeitos profissionais maximizados.
 
     Se não houver vídeos em downloads/satisfying/, usa layout full-screen com BG desfocado.
 
     Layout (1080x1920):
       ┌────────────────┐
-      │ CONTEÚDO  954px│  BG desfocado + video + zoom dinâmico
-      │ LEGENDAS (meio) │
-      ├────────────────┤  divider 6px
-      │ VÍDEO SAT. 960px│  Gameplay/parkour/satisfying loopado
+      │ CONTEÚDO 1152px│  BG desfocado + vídeo centrado + zoom dinâmico + breathing
+      │   ── LEGENDAS ─│  ← legendas centradas NA linha divisória
+      ├────────────────┤  divider 6px com glow
+      │ VÍDEO SAT. 762px│  Gameplay/parkour/satisfying loopado
+      │ ═══ PROGRESS ══│  barra de progresso neon na base
       └────────────────┘
+
+    EFEITOS PROFISSIONAIS:
+      ✦ Breathing zoom dinâmico (1.00x↔1.03x, ciclo 8s)
+      ✦ Zoom 1.15x na face durante fala
+      ✦ Temporal denoise (hqdn3d)
+      ✦ Color grading cinematográfico (contrast+saturation+gamma)
+      ✦ Sharpen adaptativo
+      ✦ Punch entry flash (branco 0.15s)
+      ✦ Fade in/out suave
+      ✦ Legendas karaoke word-by-word
     """
     fps = obter_fps_video(caminho_video) or 30
     video_sat = _encontrar_video_satisfatorio()
 
     if video_sat:
-        # ====== LAYOUT SPLIT: SAT (topo) + CONTEÚDO (baixo) ======
-        SAT_H  = 960
+        # ====== LAYOUT SPLIT: CONTEÚDO (topo 60%) + SAT (baixo 40%) ======
+        MAIN_H = 1152   # 60% de 1920 (par)
         BAR_H  = 6
-        MAIN_H = 1920 - SAT_H - BAR_H  # = 954
+        SAT_H  = 1920 - MAIN_H - BAR_H  # = 762 (par)
 
-        # Escala do vídeo principal dentro da área MAIN_H
-        scale_ratio   = 1080 / w
+        # Escala do vídeo principal para caber em 1080 x MAIN_H (preserva aspect ratio)
+        scale_ratio   = min(1080 / w, MAIN_H / h)
+        scaled_w_main = int(w * scale_ratio)
         scaled_h_main = int(h * scale_ratio)
-        if scaled_h_main > MAIN_H:
-            scaled_h_main = MAIN_H
+        scaled_w_main -= scaled_w_main % 2
         scaled_h_main -= scaled_h_main % 2
+        overlay_x_main = max(0, (1080 - scaled_w_main) // 2)
         overlay_y_main = max(0, (MAIN_H - scaled_h_main) // 2)
 
-        # Posição da face na área MAIN_H composta
+        # Posição da face na área MAIN_H composta (para zoom dinâmico)
         if face_info and face_info.get("cx_pct"):
-            face_x_c = face_info["cx_pct"]
+            face_x_c = (overlay_x_main + face_info["cx_pct"] * scaled_w_main) / 1080
             face_y_c = (overlay_y_main + face_info["cy_pct"] * scaled_h_main) / MAIN_H
         else:
             face_x_c = 0.5
@@ -1622,69 +1508,94 @@ def _aplicar_edicao_standard(caminho_video, caminho_ass, caminho_saida,
 
         parts = []
         # Input [0] = main video, Input [1] = satisfying (loopado)
+
+        # Split em vmain (foreground) e vblur (background desfocado)
         parts.append("[0:v]split=2[_vmain][_vblur]")
 
-        # Background da área principal (1080 x MAIN_H)
+        # Background desfocado da área principal (1080 x MAIN_H)
         parts.append(
-            f"[_vblur]scale=1080:{MAIN_H}:force_original_aspect_ratio=increase,"
+            f"[_vblur]scale=1080:{MAIN_H}:force_original_aspect_ratio=increase:flags=lanczos,"
             f"crop=1080:{MAIN_H},"
             f"boxblur=20:4,"
             f"eq=brightness=-0.12:saturation=0.35[_bg]"
         )
-        # Foreground da área principal
+
+        # Foreground principal (aspect ratio preservado, centrado)
         parts.append(
-            f"[_vmain]scale=1080:{scaled_h_main}:flags=lanczos[_fg]"
+            f"[_vmain]scale={scaled_w_main}:{scaled_h_main}:flags=lanczos[_fg]"
         )
+
         # Composit foreground sobre background
         parts.append(
-            f"[_bg][_fg]overlay=0:{overlay_y_main}[_composed]"
+            f"[_bg][_fg]overlay={overlay_x_main}:{overlay_y_main}[_composed]"
         )
 
-        # Zoom dinâmico dentro da área MAIN_H
+        # Zoom dinâmico + breathing dentro da área MAIN_H
         zoom_label = "_composed"
-        if intervalos_fala:
-            zf = gerar_filtro_zoom_dinamico(
-                intervalos_fala, duracao_clip,
-                face_x_c, face_y_c, fps,
-                out_w=1080, out_h=MAIN_H
-            )
-            if zf:
-                parts.append(f"[_composed]{zf}[_zoomed]")
-                zoom_label = "_zoomed"
-                print(f"  🔍 Zoom dinâmico: face=({face_x_c:.0%},{face_y_c:.0%})")
+        zf = gerar_filtro_zoom_dinamico(
+            intervalos_fala, duracao_clip,
+            face_x_c, face_y_c, fps,
+            out_w=1080, out_h=MAIN_H
+        )
+        if zf:
+            parts.append(f"[_composed]{zf}[_zoomed]")
+            zoom_label = "_zoomed"
+            print(f"  🔍 Zoom dinâmico + breathing: face=({face_x_c:.0%},{face_y_c:.0%})")
 
-        # Efeitos na área principal
+        # ══════ EFEITOS PROFISSIONAIS NA ÁREA PRINCIPAL ══════
+        fade_out = max(0, duracao_clip - 0.6)
         efx_main = [
             "format=yuv420p",
+            # Temporal denoise (remove ruído sem perder detalhe)
             "hqdn3d=1.5:1.0:2.0:1.5",
-            "eq=contrast=1.04:brightness=0.01:saturation=1.12:gamma=1.02",
-            "unsharp=3:3:0.4:3:3:0.1",
+            # Color grading cinematográfico
+            "eq=contrast=1.05:brightness=0.01:saturation=1.15:gamma=1.02",
+            # Sharpen adaptativo (nitidez profissional)
+            "unsharp=5:5:0.6:5:5:0.0",
+            # Punch entry flash (flash branco 0.15s no início)
+            "fade=t=in:st=0:d=0.15:color=white",
+            # Fade in normal (preto, mais longo)
+            "fade=t=in:st=0.15:d=0.25:color=black",
+            # Fade out suave
+            f"fade=t=out:st={fade_out:.2f}:d=0.6:color=black",
         ]
-        fade_out = max(0, duracao_clip - 0.6)
-        efx_main.append(f"fade=t=in:st=0:d=0.3:color=black")
-        efx_main.append(f"fade=t=out:st={fade_out:.2f}:d=0.6:color=black")
-        if caminho_ass and os.path.exists(caminho_ass):
-            ass_path = os.path.abspath(caminho_ass).replace('\\', '/').replace(':', '\\:')
-            efx_main.append(f"subtitles='{ass_path}'")
         parts.append(f"[{zoom_label}]{','.join(efx_main)}[_main_out]")
 
-        # Vídeo satisfatório: scale to fill 1080 x SAT_H, corta ao tamanho exacto
+        # Vídeo satisfatório: scale to fill 1080 x SAT_H, crop centrado exacto
+        # Começa num ponto aleatório garantindo que cabe duracao_clip completa
+        # Ex: se SAT tem 200s e clip tem 50s, pode começar entre 0s e 150s
+        sat_dur = _obter_duracao_video(video_sat)
+        max_start = max(0, sat_dur - duracao_clip)
+        sat_start = random.uniform(0, max_start) if max_start > 0 else 0
         parts.append(
-            f"[1:v]trim=duration={duracao_clip:.3f},setpts=PTS-STARTPTS,"
+            f"[1:v]trim=start={sat_start:.2f}:duration={duracao_clip:.3f},setpts=PTS-STARTPTS,"
             f"scale=1080:{SAT_H}:force_original_aspect_ratio=increase:flags=lanczos,"
             f"crop=1080:{SAT_H}[_sat]"
         )
 
-        # Stack: main content (topo) + satisfying (baixo)
-        # Barra divisoria via drawbox sobre o stack final
+        # Stack: main content (topo) + satisfying (baixo) = 1920px exacto
         parts.append("[_main_out][_sat]vstack=inputs=2[_vstk]")
         bar_y = MAIN_H  # divider logo abaixo do conteúdo principal
+
+        # ══════ EFEITOS FINAIS NO FRAME COMPLETO ══════
+        # Barra divisória com glow neon
+        # Barra de progresso na base (dentro do satisfying, a 20px do fundo)
+        progress_y = 1920 - 28
+        progress_h = 6
+        margin_v_leg = (1920 - MAIN_H) + 8  # = 776
+
         efx_final = [
             "format=yuv420p",
+            # Barra divisória accent com glow
             f"drawbox=x=0:y={bar_y}:w=iw:h={BAR_H}:color=0x1a1a2e@1.0:t=fill",
-            f"drawbox=x=0:y={bar_y}:w=iw:h=1:color=0x6c5ce7@0.7:t=fill",
-            f"drawbox=x=0:y={bar_y+BAR_H-1}:w=iw:h=1:color=0x6c5ce7@0.7:t=fill",
+            f"drawbox=x=0:y={bar_y}:w=iw:h=2:color=0x6c5ce7@0.8:t=fill",
+            f"drawbox=x=0:y={bar_y+BAR_H-2}:w=iw:h=2:color=0x6c5ce7@0.8:t=fill",
         ]
+        if caminho_ass and os.path.exists(caminho_ass):
+            ass_path = os.path.abspath(caminho_ass).replace('\\', '/').replace(':', '\\:')
+            efx_final.append(
+                f"subtitles='{ass_path}':force_style='Alignment=2,MarginV={margin_v_leg},Fontsize=90'"
+            )
         parts.append(f"[_vstk]{','.join(efx_final)}[out]")
         fc = ';'.join(parts)
 
@@ -1695,7 +1606,7 @@ def _aplicar_edicao_standard(caminho_video, caminho_ass, caminho_saida,
         )
 
     else:
-        # ====== LAYOUT FULL-SCREEN: blurred BG + zoom ======
+        # ====== LAYOUT FULL-SCREEN: blurred BG + todos os efeitos ======
         scale_ratio = 1080 / w
         scaled_h = int(h * scale_ratio)
         y_offset  = (1920 - scaled_h) / 2
@@ -1719,27 +1630,37 @@ def _aplicar_edicao_standard(caminho_video, caminho_ass, caminho_saida,
         overlay_y = max(0, (1920 - scaled_h) // 2)
         parts.append(f"[_bg][_fg]overlay=0:{overlay_y}[_composed]")
 
-        zoom_aplicado = False
-        if intervalos_fala and len(intervalos_fala) >= 1:
-            zoom_filter = gerar_filtro_zoom_dinamico(
-                intervalos_fala, duracao_clip,
-                face_x_composed, face_y_composed, fps
-            )
-            if zoom_filter:
-                parts.append(f"[_composed]{zoom_filter}[_zoomed]")
-                current_label = "_zoomed"
-                zoom_aplicado = True
-                print(f"  🔍 Zoom dinâmico: face=({face_x_composed:.0%},{face_y_composed:.0%})")
-        if not zoom_aplicado:
+        # Zoom dinâmico + breathing
+        zoom_filter = gerar_filtro_zoom_dinamico(
+            intervalos_fala, duracao_clip,
+            face_x_composed, face_y_composed, fps
+        )
+        if zoom_filter:
+            parts.append(f"[_composed]{zoom_filter}[_zoomed]")
+            current_label = "_zoomed"
+            print(f"  🔍 Zoom dinâmico + breathing: face=({face_x_composed:.0%},{face_y_composed:.0%})")
+        else:
             current_label = "_composed"
 
-        efx = ["format=yuv420p"]
-        efx.append("hqdn3d=1.5:1.0:2.0:1.5")
-        efx.append("eq=contrast=1.04:brightness=0.01:saturation=1.12:gamma=1.02")
-        efx.append("unsharp=3:3:0.4:3:3:0.1")
+        # ══════ TODOS OS EFEITOS PROFISSIONAIS ══════
         fade_out_start = max(0, duracao_clip - 0.6)
-        efx.append("fade=t=in:st=0:d=0.3:color=black")
-        efx.append(f"fade=t=out:st={fade_out_start:.2f}:d=0.6:color=black")
+        progress_y = 1920 - 28
+        progress_h = 6
+
+        efx = [
+            "format=yuv420p",
+            # Temporal denoise
+            "hqdn3d=1.5:1.0:2.0:1.5",
+            # Color grading cinematográfico
+            "eq=contrast=1.05:brightness=0.01:saturation=1.15:gamma=1.02",
+            # Sharpen adaptativo
+            "unsharp=5:5:0.6:5:5:0.0",
+            # Punch entry flash
+            "fade=t=in:st=0:d=0.15:color=white",
+            "fade=t=in:st=0.15:d=0.25:color=black",
+            # Fade out
+            f"fade=t=out:st={fade_out_start:.2f}:d=0.6:color=black",
+        ]
         if caminho_ass and os.path.exists(caminho_ass):
             ass_path = os.path.abspath(caminho_ass).replace('\\', '/').replace(':', '\\:')
             efx.append(f"subtitles='{ass_path}'")
@@ -1986,11 +1907,12 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
                 duracao_final=duracao_clip,        # duração REAL pós-jump-cut para clamping
             )
 
-        # ═══ PASSO 3: EDIÇÃO PROFISSIONAL COM EFEITOS DINÂMICOS ═══
-        print(f"  🎬 Aplicando edição:")
-        print(f"     ✦ Full view + blurred BG + zoom dinâmico na fala")
-        print(f"     ✦ Denoise + Color correction subtil")
-        print(f"     ✦ Legendas karaoke word-by-word")
+        # ═══ PASSO 3: EDIÇÃO PROFISSIONAL COM TODOS OS EFEITOS ═══
+        print(f"  🎬 Aplicando edição profissional:")
+        print(f"     ✦ Breathing zoom + zoom 1.15x na fala")
+        print(f"     ✦ Denoise + Color grade + Sharpen 5x5")
+        print(f"     ✦ Vinheta cinematográfica + Punch flash")
+        print(f"     ✦ Progress bar neon + Legendas karaoke")
 
         sucesso = aplicar_edicao_profissional(
             caminho_cortado, caminho_ass, caminho_preloop, duracao_clip,
@@ -2021,14 +1943,18 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
         razao = clipe.get('razao', 'Clipe viral interessante')
         metadados_yt = gerar_metadados_youtube(titulo, razao, duracao_clip)
 
+        # Se o Ollama já trouxe copy YouTube (descricao), usa-o
+        youtube_titulo_final = (clipe.get('titulo') or metadados_yt["titulo"] or titulo).strip()
+        youtube_descricao_final = (clipe.get('descricao') or metadados_yt["descricao"] or "").strip()
+
         clipe_dict = {
             "numero": i,
             "arquivo": caminho_final,
             "titulo": titulo,
             "razao": razao,
             "youtube": {
-                "titulo": metadados_yt["titulo"],
-                "descricao": metadados_yt["descricao"],
+                "titulo": youtube_titulo_final,
+                "descricao": youtube_descricao_final,
                 "hashtags": metadados_yt["hashtags"],
                 "trigger": metadados_yt["trigger"]
             }

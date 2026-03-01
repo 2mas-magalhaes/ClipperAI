@@ -183,9 +183,17 @@ class QueueWorker:
                     db.set_recent_video_clip_status(source_video_id, "error")
                 return
 
+            # Passa a URL original para a análise (para incluir no copy YouTube)
+            try:
+                transcricao["video_url"] = item.get("url", "")
+            except Exception:
+                pass
+
             db.update_queue_item(item_id, progress=55, status_detail="A analisar com Llama...")
 
-            clipes_recomendados = analisar_com_ollama(transcricao)
+            cfg_worker = db.get_settings()
+            ollama_model = cfg_worker.get("ollama_model") or "llama3.1"
+            clipes_recomendados = analisar_com_ollama(transcricao, modelo=ollama_model)
             if not clipes_recomendados:
                 db.update_queue_item(item_id, status="error", error_msg="Falha na análise com Llama",
                                      finished_at=datetime.now().isoformat())

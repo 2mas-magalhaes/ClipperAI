@@ -187,7 +187,7 @@ def transcrever_audio_whisper(caminho_audio):
         traceback.print_exc()
         return None
 
-def analisar_com_ollama(transcrição):
+def analisar_com_ollama(transcrição, modelo=None):
     """
     Analisa a transcrição usando Llama 2 rodando localmente via Ollama.
     100% GRATUITO, roda no seu computador!
@@ -201,11 +201,21 @@ def analisar_com_ollama(transcrição):
     
     Args:
         transcrição (dict): Dicionário com texto e segmentos da transcrição
+        modelo (str, optional): Nome do modelo Ollama a usar. Padrão: "llama3.1"
     
     Returns:
         list: Lista com os clipes recomendados (início, fim, motivo)
     """
     try:
+        # ── Lê o modelo configurado nas definições ──
+        if not modelo:
+            try:
+                import database as _db
+                cfg = _db.get_settings()
+                modelo = cfg.get("ollama_model", "llama3.1")
+            except Exception:
+                modelo = "llama3.1"
+
         # Verifica se Ollama está rodando
         try:
             ollama.list()
@@ -215,8 +225,8 @@ def analisar_com_ollama(transcrição):
             print("   1. Abra o Ollama Desktop (na barra de tarefas)")
             print("   2. OU abra um terminal e digite: ollama serve")
             return None
-        
-        print("Analisando vídeo com Llama 2 (GRATUITO, no seu computador)...", flush=True)
+
+        print(f"Analisando vídeo com {modelo} (GRATUITO, no seu computador)...", flush=True)
 
         INTRO_SKIP_SEG = 120  # ignora os primeiros 2 min (intro/apresentação)
         CHAR_LIMIT      = 20000  # aumentado para dar mais contexto ao Llama
@@ -246,144 +256,133 @@ def analisar_com_ollama(transcrição):
         if len(texto_timed) > CHAR_LIMIT:
             texto_timed = texto_timed[:CHAR_LIMIT] + "\n[... transcript truncated ...]"
 
-        # Prompt focado em potencial viral com critérios claros de inclusão/exclusão
-        prompt = f"""You are a world-class short-form video editor and retention specialist who has optimized countless viral videos on TikTok, Instagram Reels and YouTube Shorts. Your expertise: identifying moments with MAXIMUM RETENTION POWER through pacing, energy escalation, and psychological hooks.
+        # System message: força o modelo a responder APENAS em JSON e em Português
+        system_msg = (
+            "És uma API que responde APENAS em JSON. "
+            "NUNCA escrevas explicações, cumprimentos, markdown, listas com hífen, nem texto fora de objetos JSON. "
+            "Responde SEMPRE em Português (Portugal). "
+            "Cada resposta é uma sequência de objetos JSON puros, UM POR LINHA, sem mais texto."
+        )
 
-The transcript below ALREADY skips the first 2 minutes (intro). Each line shows the timestamp [MM:SS] followed by the spoken words.
+        # Tenta obter a URL do vídeo original (para incluir na descrição)
+        video_url = (
+            (transcrição or {}).get("video_url")
+            or (transcrição or {}).get("url")
+            or (transcrição or {}).get("source_url")
+            or ""
+        )
 
-TRANSCRIPT:
+        # User message: prompt de análise de clipes (PT-PT, padrão YouTube)
+        user_msg = f"""Tens uma transcrição com timestamps de um vídeo (os primeiros 2 minutos já foram ignorados).
+
+LINK DO VÍDEO ORIGINAL (usa este link na descrição):
+{video_url}
+
+TRANSCRIÇÃO (com timestamps):
 {texto_timed}
 
----
+TAREFA:
+Escolhe 5 a 7 momentos (clipes) com maior potencial viral para YouTube Shorts.
 
-YOUR TASK:
-Select 5 to 7 clips (30–60 seconds each) with MAXIMAL ENGAGEMENT POTENTIAL. Spread them across different parts of the video — do NOT cluster them all near the beginning.
+REGRAS DE SELEÇÃO:
+- Espalha os clipes ao longo do vídeo (não escolhas tudo no início).
+- EXCLUI: patrocínios, intros/cumprimentos, partes lentas, pedidos de subscrição.
+- INCLUI apenas momentos com pelo menos 1 destes gatilhos: POLÉMICA, IDENTIFICÁVEL, SURPREENDENTE, PICO EMOCIONAL, HOOK FORTE, ALTA ENERGIA.
 
-CRITICAL EDITING OPTIMIZATION FACTORS:
-- ENERGY PEAKS: Prioritize moments where vocal pace ACCELERATES, volume INCREASES, or emotional INTENSITY jumps. These are ZOOM-WORTHY moments (rapid camera movement during peak energy = viewer neuro-lock).
-- RHYTHM & PACING: Look for rapid-fire delivery, lists, contrasts, or quick idea volleys. Fast talking = fast editing = viewer cannot look away.
-- PATTERN BREAKS: Sudden topic shifts, unexpected revelations, or sharp tonal changes. Brain MUST refocus when pattern breaks.
-- OPEN LOOPS: Choose moments that make viewers wonder "wait, what happens next?" Creates irresistible forward momentum.
+REGRAS DE OUTPUT (CRÍTICO):
+- Escreve APENAS em Português (Portugal).
+- Output = APENAS objetos JSON, um por linha, sem markdown e sem texto extra.
+- Chaves obrigatórias em cada objeto (exatamente estas): titulo, descricao, razao, transcript
 
-STRICT EXCLUSION RULES — NEVER select:
-- Sponsor segments, ads, brand deals or product promotions
-- Video intros where the creator greets the audience or introduces themselves
-- Slow, meandering explanations or scene-setting with no payoff
-- Filler content, transitions, "stay tuned" or "subscribe" calls to action
-- Low-energy delivery, long pauses, or conversational drag
+FORMATO DE CADA OBJETO JSON (1 por linha):
+{{
+  "titulo": "Título curto (máx 60 caracteres), estilo YouTube, profissional e viral",
+  "descricao": "2-5 linhas, tom YouTube. Inclui SEMPRE o link do vídeo original numa linha separada: {video_url}. Inclui 3-6 hashtags no fim (ex: #Shorts #YouTubeShorts ...)",
+  "razao": "[GATILHO] Nota curta de edição (ex: corte seco, punch-in, legenda em destaque)",
+  "transcript": "Copia as palavras exatas de abertura (da transcrição) deste momento"
+}}
 
-STRICT INCLUSION RULES — clip MUST have at least ONE of these:
-1. POLEMIC / CONTROVERSIAL — divisive opinion generating "true vs wrong" comments. High debate energy.
-2. RELATABLE — universal feeling triggering "this is literally me". Drives shares and saves.
-3. SURPRISING / NOVEL — unknown fact or revelation stopping scrollers mid-swipe. Creates saves.
-4. EMOTIONAL PEAK — raw intensity (anger, joy, shock, triumph). Visceral brain engagement = cannot look away.
-5. STRONG HOOK — opening line SO PUNCHY the viewer physically cannot continue scrolling.
-6. RHYTHM & DELIVERY ENERGY — fast-paced, energetic speech with vocal peaks. Optimal for dynamic editing and zoom effects.
-
-For EACH clip, OUTPUT a JSON object on ONE single line with these exact keys:
-{{"titulo":"Punchy title (max 8 words, action-oriented)", "razao":"[trigger] + editing note: suggest zoom/cut/effect if applicable", "transcript":"The exact opening words from the transcript for this clip"}}
-
-Example with editing guidance:
-{{"titulo":"Wait, this changes everything", "razao":"[SURPRISING] + High energy delivery - perfect for zoom-in on peak phrase + quick cut transition", "transcript":"[MM:SS] Actually nobody knows..."}}
-
-OUTPUT — respond with ONLY JSON lines, nothing else:
-{{"titulo":"T1", "razao":"[trigger] editing note", "transcript":"[T] words"}}
-{{"titulo":"T2", "razao":"[trigger] editing note", "transcript":"[T] words"}}
-{{"titulo":"T3", "razao":"[trigger] editing note", "transcript":"[T] words"}}
-{{"titulo":"T4", "razao":"[trigger] editing note", "transcript":"[T] words"}}
-{{"titulo":"T5", "razao":"[trigger] editing note", "transcript":"[T] words"}}"""
+Agora devolve APENAS as linhas JSON:"""
         
-        # Chama o Llama rodando localmente
-        print("  ⏳ Aguardando resposta do Llama 2...", flush=True)
+        # Chama o modelo via ollama.chat (suporta system message para todos os modelos)
+        print(f"  ⏳ Aguardando resposta de {modelo}...", flush=True)
         import time as _t2
         _t_llama = _t2.time()
-        resposta = ollama.generate(
-            model="llama2",
-            prompt=prompt,
-            stream=False
+        resposta = ollama.chat(
+            model=modelo,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user",   "content": user_msg},
+            ],
+            stream=False,
+            options={
+                "temperature": 0.2,
+                "top_p": 0.9,
+                "num_ctx": 8192  # Context window ampliado para melhor análise (8K tokens)
+            }
         )
         _t_llama_end = _t2.time()
-        print(f"  ✅ Llama respondeu em {_t_llama_end - _t_llama:.1f}s", flush=True)
+        print(f"  ✅ {modelo} respondeu em {_t_llama_end - _t_llama:.1f}s", flush=True)
+
+        # ollama.chat devolve um objeto — o texto está em .message.content
+        resposta_texto = resposta.message.content if hasattr(resposta, 'message') else resposta["message"]["content"]
         
-        resposta_texto = resposta["response"]
-        
-        # Extrai JSON da resposta
+        # ── Extrai JSON da resposta (robusto a vários formatos) ──
         try:
-            clipes = []
-            
-            # Estratégia 1: Procura por padrões JSON {...} em qualquer lugar do texto
             import re as regex
-            
-            # Procura por padrões como {"titulo": ..., "razao": ..., "transcript": ...}
-            # Usa um regex mais flexível para encontrar JSONs válidos
-            pattern = r'\{[^{}]*"titulo"[^{}]*"razao"[^{}]*(?:"transcript"|"texto")[^{}]*\}'
-            matches = regex.findall(pattern, resposta_texto)
-            
-            if matches:
-                for json_str in matches:
-                    try:
-                        item = json.loads(json_str)
+            clipes = []
+
+            # Remove blocos markdown ```json ... ``` ou ``` ... ```
+            texto_limpo = regex.sub(r'```(?:json)?\s*', '', resposta_texto)
+            texto_limpo = texto_limpo.replace('```', '')
+
+            # Estratégia 1: regex greedy que apanha objectos com chaves aninhadas
+            # Encontra todos os {…} mesmo com strings longas dentro
+            for m in regex.finditer(r'\{(?:[^{}]|\{[^{}]*\})*\}', texto_limpo):
+                raw = m.group(0)
+                try:
+                    item = json.loads(raw)
+                    # Aceita qualquer objecto que tenha título e razão
+                    if item.get('titulo') or item.get('title'):
                         clipes.append(item)
+                except json.JSONDecodeError:
+                    pass
+
+            # Estratégia 2: linha por linha (quando o modelo separa por newlines)
+            if not clipes:
+                for linha in texto_limpo.splitlines():
+                    linha = regex.sub(r'^\d+[.)\-]\s*', '', linha).strip()
+                    if linha.startswith('{') and linha.endswith('}'):
+                        try:
+                            item = json.loads(linha)
+                            if item.get('titulo') or item.get('title'):
+                                clipes.append(item)
+                        except json.JSONDecodeError:
+                            pass
+
+            # Estratégia 3: array JSON
+            if not clipes:
+                m = regex.search(r'\[.*?\]', texto_limpo, flags=regex.DOTALL)
+                if m:
+                    try:
+                        arr = json.loads(m.group(0))
+                        if isinstance(arr, list):
+                            clipes = arr
                     except json.JSONDecodeError:
                         pass
-            
-            # Estratégia 2: Se não achou, tenta linha por linha
-            if not clipes:
-                for linha in resposta_texto.split('\n'):
-                    # Remove números de lista (1., 2., etc)
-                    linha = regex.sub(r'^\d+\.\s*', '', linha).strip()
-                    if linha.startswith('{') and '}' in linha:
-                        try:
-                            # Extrai o JSON até o primeiro }
-                            fim = linha.find('}') + 1
-                            json_str = linha[:fim]
-                            item = json.loads(json_str)
-                            clipes.append(item)
-                        except:
-                            pass
-            
-            # Estratégia 3: Procura por um array JSON único
-            if not clipes:
-                inicio = resposta_texto.find("[")
-                fim = resposta_texto.rfind("]") + 1
-                if inicio != -1 and fim > inicio:
-                    try:
-                        json_str = resposta_texto[inicio:fim]
-                        clipes = json.loads(json_str)
-                        if not isinstance(clipes, list):
-                            clipes = [clipes]
-                    except:
-                        pass
-            
-            if clipes and len(clipes) > 0:
+
+            if clipes:
                 print(f"✅ Análise concluída! {len(clipes)} clipes recomendados:")
                 for i, clipe in enumerate(clipes, 1):
                     titulo = clipe.get('titulo') or clipe.get('title', 'Sem título')
                     print(f"  {i}. {titulo}")
                 return clipes
-            
-            # Se chegou aqui, não conseguiu parsear
-            print("⚠️ Resposta do Llama (primeiros 300 chars):")
-            print(resposta_texto[:300])
-            print("\n💡 Dica: O Llama pode estar gerando um formato diferente.")
-            print("   Tentando usar formato genérico...")
-            
-            # Tenta criar clipes genéricos baseado no texto
-            clipes_genéricos = [
-                {
-                    "titulo": f"Clipe {i+1}",
-                    "razao": "Momento interessante para clip",
-                    "transcript": "Conteúdo extraído da transcrição"
-                }
-                for i in range(min(3, len(resposta_texto) // 200))
-            ]
-            
-            if clipes_genéricos:
-                print(f"✅ Usando {len(clipes_genéricos)} clipes genéricos")
-                return clipes_genéricos
-            
+
+            # Nenhuma estratégia funcionou
+            print(f"⚠️ [{modelo}] Não foi possível extrair JSON da resposta.")
+            print(f"   Resposta (primeiros 400 chars): {resposta_texto[:400]}")
             return None
-            
+
         except Exception as e:
             print(f"⚠️ Erro ao processar resposta: {e}")
             return None
