@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ClipAI — Dashboard</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{ cache_bust }}">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
 </head>
@@ -143,11 +143,39 @@
             </div>
 
             <!-- Queue Table -->
+            <div class="queue-bulk-bar" id="queue-bulk-bar" style="display:none">
+                <div class="bulk-bar-left">
+                    <span><span class="bulk-count" id="bulk-selected-count">0</span> selecionados</span>
+                </div>
+                <div class="bulk-bar-actions">
+                    <button class="btn btn-sm" onclick="bulkSetChannel()" title="Mudar canal">
+                        <i class="fab fa-youtube"></i> Canal
+                    </button>
+                    <button class="btn btn-sm" onclick="bulkSetPrivacy()" title="Mudar visibilidade">
+                        <i class="fas fa-eye"></i> Visibilidade
+                    </button>
+                    <button class="btn btn-sm" onclick="bulkSetAutoPublish(true)" title="Ativar auto-publicar">
+                        <i class="fas fa-check-circle"></i> Auto-publicar ON
+                    </button>
+                    <button class="btn btn-sm" onclick="bulkSetAutoPublish(false)" title="Desativar auto-publicar">
+                        <i class="fas fa-times-circle"></i> Auto-publicar OFF
+                    </button>
+                    <button class="btn btn-sm" onclick="bulkRetry()" title="Tentar novamente">
+                        <i class="fas fa-redo"></i> Retry
+                    </button>
+                    <button class="btn btn-sm btn-danger" onclick="bulkDelete()" title="Apagar selecionados">
+                        <i class="fas fa-trash"></i> Apagar
+                    </button>
+                </div>
+            </div>
             <div class="card">
                 <div class="card-body no-pad">
                     <table class="table" id="queue-table">
                         <thead>
                             <tr>
+                                <th style="width:36px">
+                                    <input type="checkbox" id="queue-select-all-head" onchange="toggleSelectAllQueue(this.checked)" title="Selecionar todos">
+                                </th>
                                 <th style="width:36px"></th>
                                 <th style="width:40px">#</th>
                                 <th>Título</th>
@@ -191,10 +219,19 @@
         <!-- ═══════════════ CANAIS A SEGUIR ═══════════════ -->
         <div class="page" id="page-followed">
             <div class="page-header">
-                <h1>Canais a Seguir</h1>
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                    <div>
+                        <h1>Canais a Seguir</h1>
+                        <p class="subtitle" id="next-scan-info" style="margin-top:4px">Próximo scan em <span id="next-scan-countdown">—</span></p>
+                    </div>
+                    <div></div>
+                </div>
                 <div class="page-actions">
-                    <button class="btn" onclick="scanAllFollowedChannels()">
+                    <button class="btn" onclick="openAutoScanModal()">
                         <i class="fas fa-rotate"></i> Scan Automático
+                    </button>
+                    <button class="btn" onclick="instantScan(this)">
+                        <i class="fas fa-search"></i> Scan Instantâneo
                     </button>
                     <button class="btn btn-primary" onclick="openAddFollowedModal()">
                         <i class="fas fa-plus"></i> Seguir Canal
@@ -349,6 +386,66 @@
                 </div>
             </div>
 
+            <!-- Auto Manager Settings -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-robot"></i> Gestão Automática</h2>
+                    <div class="status-indicator" id="auto-manager-status">
+                        <span class="status-dot offline"></span>
+                        <span>Desativado</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="info-box" style="margin-bottom: 1rem;">
+                        <i class="fas fa-magic"></i>
+                        <div>
+                            <strong>Modo Automático:</strong> O sistema limpará vídeos antigos automaticamente e baixará novos vídeos de uma playlist do YouTube para processar continuamente.
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="auto-manager-enabled">
+                            <span>Ativar gestão automática</span>
+                        </label>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>URL da Playlist do YouTube *</label>
+                        <div style="display:flex;gap:8px;align-items:center">
+                            <input type="url" id="auto-manager-playlist" class="form-control" placeholder="https://www.youtube.com/playlist?list=..." style="flex:1;width:auto;min-width:0">
+                            <button type="button" class="btn btn-sm btn-primary" onclick="testAutoManagerPlaylist()" title="Testar a URL da playlist" style="white-space:nowrap;flex-shrink:0">
+                                <i class="fas fa-check"></i> Testar
+                            </button>
+                        </div>
+                        <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">
+                            Ex: Playlists de vídeos "satisfying", gameplay, cooking, etc.
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Limite de armazenamento (MB)</label>
+                            <input type="number" id="auto-manager-storage" class="form-control" min="1000" max="50000" value="5000" step="500">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">
+                                Quando atingir este limite, vídeos antigos serão removidos automaticamente
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Intervalo de verificação (minutos)</label>
+                            <input type="number" id="auto-manager-interval" class="form-control" min="5" max="120" value="15">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">
+                                Frequência de verificação para limpeza e novos vídeos
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <button class="btn btn-primary" onclick="saveAutoManagerSettings()">
+                        <i class="fas fa-save"></i> Guardar e Ativar
+                    </button>
+                </div>
+            </div>
+
             <!-- YouTube Accounts -->
             <div class="card">
                 <div class="card-header">
@@ -384,14 +481,59 @@
                 <button class="modal-close" onclick="closeModal('modal-add-video')">&times;</button>
             </div>
             <div class="modal-body">
-                <div class="form-group">
-                    <label>URL do YouTube *</label>
-                    <input type="url" id="video-url" class="form-control" placeholder="https://www.youtube.com/watch?v=...">
+                <!-- Tabs para YouTube vs Ficheiro -->
+                <div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--border-color);padding-bottom:12px">
+                    <button class="tab-btn active" onclick="switchAddVideoTab('youtube')" style="flex:1;padding:8px;background:none;border:none;color:inherit;cursor:pointer;border-bottom:2px solid transparent;transition:all 0.2s" id="tab-youtube-btn">
+                        <i class="fab fa-youtube"></i> URL YouTube
+                    </button>
+                    <button class="tab-btn" onclick="switchAddVideoTab('file')" style="flex:1;padding:8px;background:none;border:none;color:inherit;cursor:pointer;border-bottom:2px solid transparent;transition:all 0.2s" id="tab-file-btn">
+                        <i class="fas fa-file-video"></i> Ficheiro Local
+                    </button>
                 </div>
-                <div class="form-group">
-                    <label>Título (opcional)</label>
-                    <input type="text" id="video-title" class="form-control" placeholder="Nome para identificar o vídeo">
+
+                <!-- YouTube Tab -->
+                <div id="tab-youtube-content">
+                    <div class="form-group">
+                        <label>URL do YouTube *</label>
+                        <input type="url" id="video-url" class="form-control" placeholder="https://www.youtube.com/watch?v=...">
+                    </div>
+                    <div class="form-group">
+                        <label>Título (opcional)</label>
+                        <input type="text" id="video-title" class="form-control" placeholder="Nome para identificar o vídeo">
+                    </div>
                 </div>
+
+                <!-- File Tab -->
+                <div id="tab-file-content" style="display:none">
+                    <div class="form-group">
+                        <label>URL do Vídeo Original (YouTube)</label>
+                        <input type="url" id="video-origin-url" class="form-control" placeholder="https://www.youtube.com/watch?v=..." style="margin-bottom:8px">
+                        <div id="video-origin-status" style="font-size:0.85rem;color:var(--text-muted);margin-top:4px">Cole a URL original para auto-preencher nome, canal e descrição</div>
+                        <div id="video-origin-info" style="display:none;margin-top:8px;padding:8px;background:var(--bg-secondary);border-radius:4px;font-size:0.85rem">
+                            <p style="margin:4px 0" id="origin-title-display"></p>
+                            <p style="margin:4px 0" id="origin-channel-display"></p>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Ficheiro de Vídeo *</label>
+                        <div style="border:2px dashed var(--border-color);border-radius:8px;padding:20px;text-align:center;cursor:pointer;transition:all 0.2s" id="file-drop-area">
+                            <input type="file" id="video-file" accept="video/*" style="display:none">
+                            <div style="font-size:32px;margin-bottom:8px"><i class="fas fa-cloud-upload-alt"></i></div>
+                            <p style="margin:0;font-weight:500">Arraste vídeo ou clique para selecionar</p>
+                            <p style="margin:4px 0 0 0;font-size:0.85rem;color:var(--text-muted)">MP4, WebM, MKV até 4GB</p>
+                        </div>
+                        <div id="file-name-display" style="margin-top:8px;padding:8px;background:var(--bg-secondary);border-radius:4px;display:none">
+                            <i class="fas fa-check-circle" style="color:var(--green)"></i>
+                            <span id="file-name-text"></span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Título do Vídeo *</label>
+                        <input type="text" id="video-file-title" class="form-control" placeholder="Nome para identificar o vídeo">
+                    </div>
+                </div>
+
+                <!-- Comum -->
                 <div class="form-group">
                     <label>Publicar no Canal</label>
                     <select id="video-channel" class="form-control">
@@ -408,7 +550,7 @@
             </div>
             <div class="modal-footer">
                 <button class="btn" onclick="closeModal('modal-add-video')">Cancelar</button>
-                <button class="btn btn-primary" onclick="addVideoToQueue()">
+                <button class="btn btn-primary" onclick="addVideoToQueue()" id="btn-add-video">
                     <i class="fas fa-plus"></i> Adicionar
                 </button>
             </div>
@@ -508,6 +650,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v={{ cache_bust }}"></script>
 </body>
 </html>

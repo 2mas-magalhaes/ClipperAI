@@ -6,9 +6,91 @@ from faster_whisper import WhisperModel
 import ollama
 
 
-# Cache global para o modelo Whisper - NUNCA deixar o GC destruir o modelo
-# CTranslate2 tem um bug no destrutor que causa SIGABRT ao libertar memória CUDA
+# Cache global para o modelo Whisper
 _whisper_model_cache = None
+
+
+def _sanitize_json_object_text(raw):
+    """Tenta reparar JSON quase-válido vindo do LLM (newlines em strings, aspas curvas, trailing commas)."""
+    if not raw:
+        return raw
+
+    fixed = raw.replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace("\u2019", "'")
+
+    out = []
+    in_string = False
+    escaped = False
+    for ch in fixed:
+        if ch == '"' and not escaped:
+            in_string = not in_string
+            out.append(ch)
+            continue
+
+        if in_string and ch in ('\n', '\r'):
+            out.append('\\n')
+            escaped = False
+            continue
+
+        out.append(ch)
+        escaped = (ch == '\\' and not escaped)
+        if ch != '\\':
+            escaped = False
+
+    fixed = ''.join(out)
+    fixed = re.sub(r',\s*([}\]])', r'\1', fixed)
+    return fixed
+
+
+def _extract_json_objects_relaxed(texto):
+    """Extrai objetos JSON mesmo quando vêm múltiplos blocos ou com pequenas quebras de formato."""
+    objs = []
+    if not texto:
+        return objs
+
+    start = -1
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for idx, ch in enumerate(texto):
+        if ch == '"' and not escaped:
+            in_string = not in_string
+
+        if not in_string:
+            if ch == '{':
+                if depth == 0:
+                    start = idx
+                depth += 1
+            elif ch == '}':
+                if depth > 0:
+                    depth -= 1
+                    if depth == 0 and start != -1:
+                        raw = texto[start:idx + 1]
+                        objs.append(raw)
+                        start = -1
+
+        escaped = (ch == '\\' and not escaped)
+        if ch != '\\':
+            escaped = False
+
+    return objs
+
+
+def liberar_gpu_whisper():
+    """Liberta a VRAM do Whisper para o Ollama ter GPU total.
+    Sem isto, Whisper ocupa ~2GB e o Ollama offloads para CPU (10x mais lento)."""
+    global _whisper_model_cache
+    if _whisper_model_cache is None:
+        return
+    try:
+        _whisper_model_cache = None
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        print("  🧹 VRAM libertada (modelo Whisper descarregado)")
+    except Exception as e:
+        print(f"  ⚠️ Aviso ao libertar GPU: {e}")
 
 def verificar_gpu():
     """
@@ -77,7 +159,7 @@ def extrair_audio_do_video(caminho_video, caminho_audio="downloads/audio_temp.wa
         print(f"❌ Erro ao extrair áudio: {e}")
         return None
 
-def transcrever_audio_whisper(caminho_audio):
+def transcrever_audio_whisper(caminho_audio, progress_callback=None):
     """
     Transcreve um arquivo de áudio usando Faster-Whisper com suporte GPU.
     Roda 100% LOCAL no seu computador, sem custos!
@@ -86,11 +168,15 @@ def transcrever_audio_whisper(caminho_audio):
     
     Args:
         caminho_audio (str): Caminho do arquivo de áudio (MP3, WAV, etc)
+        progress_callback (callable): Função callback(pct, detail) para atualizar progresso
     
     Returns:
         dict: Dicionário com 'texto_completo' e 'segmentos' (com timestamps)
     """
     try:
+        if progress_callback:
+            progress_callback(0, "Detectando GPU")
+        
         # Detecta GPU
         device, gpu_disponivel, info_gpu = verificar_gpu()
         print(info_gpu)
@@ -100,6 +186,9 @@ def transcrever_audio_whisper(caminho_audio):
             print(f"⚡ Usando GPU - transcrição RÁPIDA! (aprox. 20-60 segundos)")
         else:
             print(f"⏳ Usando CPU - transcrição mais lenta (aprox. 2-5 minutos)")
+        
+        if progress_callback:
+            progress_callback(10, "Carregando modelo Whisper")
         
         # Carrega o modelo Whisper com suporte GPU
         # CPU: 'small' (bom equilíbrio velocidade/qualidade)
@@ -121,6 +210,9 @@ def transcrever_audio_whisper(caminho_audio):
         # Guarda referência global para EVITAR que o GC chame o destrutor
         # CTranslate2 crasha (SIGABRT) ao destruir o modelo CUDA
         _whisper_model_cache = model
+        
+        if progress_callback:
+            progress_callback(20, "Transcrevendo")
         
         # Transcreve com word_timestamps para legendas dinâmicas
         # vad_filter=True filtra silêncios e música (só transcreve fala!)
@@ -167,14 +259,19 @@ def transcrever_audio_whisper(caminho_audio):
             # Progresso a cada 20 segmentos
             if len(lista_segmentos) % 20 == 0:
                 print(f"  📝 {len(lista_segmentos)} segmentos transcritos...")
+                if progress_callback:
+                    # Estimar progresso (30-90% do range)
+                    pct = min(90, 30 + (len(lista_segmentos) * 2))  # assume ~30 segs por min
+                    progress_callback(pct, f"{len(lista_segmentos)} segmentos")
         
         t_elapsed = _time.time() - t_start
         print(f"✅ Transcrição concluída em {t_elapsed:.1f}s! ({len(lista_segmentos)} segmentos)", flush=True)
         
-        # NÃO apagar o modelo! O destrutor do CTranslate2 causa SIGABRT.
-        # O modelo fica no _whisper_model_cache global.
-        # O Ollama é um processo separado com o seu próprio contexto CUDA,
-        # por isso consegue gerir a GPU independentemente.
+        if progress_callback:
+            progress_callback(100, "Transcrição completa")
+        
+        # O modelo fica no _whisper_model_cache global e será libertado
+        # por liberar_gpu_whisper() antes de chamar o Ollama.
         print("  ✅ Transcrição pronta, a avançar para análise...", flush=True)
         
         return {
@@ -187,7 +284,7 @@ def transcrever_audio_whisper(caminho_audio):
         traceback.print_exc()
         return None
 
-def analisar_com_ollama(transcrição, modelo=None):
+def analisar_com_ollama(transcrição, modelo=None, progress_callback=None):
     """
     Analisa a transcrição usando Llama 2 rodando localmente via Ollama.
     100% GRATUITO, roda no seu computador!
@@ -202,11 +299,15 @@ def analisar_com_ollama(transcrição, modelo=None):
     Args:
         transcrição (dict): Dicionário com texto e segmentos da transcrição
         modelo (str, optional): Nome do modelo Ollama a usar. Padrão: "llama3.1"
+        progress_callback (callable): Função callback(pct, detail) para atualizar progresso
     
     Returns:
         list: Lista com os clipes recomendados (início, fim, motivo)
     """
     try:
+        if progress_callback:
+            progress_callback(0, "Verificando Ollama")
+        
         # ── Lê o modelo configurado nas definições ──
         if not modelo:
             try:
@@ -227,9 +328,12 @@ def analisar_com_ollama(transcrição, modelo=None):
             return None
 
         print(f"Analisando vídeo com {modelo} (GRATUITO, no seu computador)...", flush=True)
+        
+        if progress_callback:
+            progress_callback(10, "Preparando transcrição")
 
         INTRO_SKIP_SEG = 120  # ignora os primeiros 2 min (intro/apresentação)
-        CHAR_LIMIT      = 20000  # aumentado para dar mais contexto ao Llama
+        CHAR_LIMIT      = 10000  # equilibrio contexto vs velocidade na GPU
 
         # ── Constrói transcrição com timestamps, pulando a intro ──
         # Formato: "[MM:SS] texto do segmento"
@@ -258,10 +362,8 @@ def analisar_com_ollama(transcrição, modelo=None):
 
         # System message: força o modelo a responder APENAS em JSON e em Português
         system_msg = (
-            "És uma API que responde APENAS em JSON. "
-            "NUNCA escrevas explicações, cumprimentos, markdown, listas com hífen, nem texto fora de objetos JSON. "
-            "Responde SEMPRE em Português (Portugal). "
-            "Cada resposta é uma sequência de objetos JSON puros, UM POR LINHA, sem mais texto."
+            "És uma API JSON. Responde APENAS com objetos JSON válidos, um por linha. "
+            "Sem explicações, sem markdown. Português (Portugal)."
         )
 
         # Tenta obter a URL do vídeo original (para incluir na descrição)
@@ -271,41 +373,34 @@ def analisar_com_ollama(transcrição, modelo=None):
             or (transcrição or {}).get("source_url")
             or ""
         )
+        if isinstance(video_url, str) and video_url.startswith("local://"):
+            video_url = ""
 
-        # User message: prompt de análise de clipes (PT-PT, padrão YouTube)
-        user_msg = f"""Tens uma transcrição com timestamps de um vídeo (os primeiros 2 minutos já foram ignorados).
+        # Instrução de URL condicional (só se houver URL real)
+        url_instrucao = f"Inclui o link do vídeo original na descrição: {video_url}" if video_url else ""
 
-LINK DO VÍDEO ORIGINAL (usa este link na descrição):
-{video_url}
+        # User message: prompt conciso para resposta rápida
+        user_msg = f"""Transcrição com timestamps (primeiros 2 min ignorados):
 
-TRANSCRIÇÃO (com timestamps):
 {texto_timed}
 
-TAREFA:
-Escolhe 5 a 7 momentos (clipes) com maior potencial viral para YouTube Shorts.
+Escolhe 5-7 momentos virais para YouTube Shorts.
 
-REGRAS DE SELEÇÃO:
-- Espalha os clipes ao longo do vídeo (não escolhas tudo no início).
-- EXCLUI: patrocínios, intros/cumprimentos, partes lentas, pedidos de subscrição.
-- INCLUI apenas momentos com pelo menos 1 destes gatilhos: POLÉMICA, IDENTIFICÁVEL, SURPREENDENTE, PICO EMOCIONAL, HOOK FORTE, ALTA ENERGIA.
+REGRAS:
+- Espalha pelo vídeo. EXCLUI patrocínios, intros, partes lentas.
+- INCLUI: polémicas, surpresas, picos emocionais, hooks fortes, alta energia.
 
-REGRAS DE OUTPUT (CRÍTICO):
-- Escreve APENAS em Português (Portugal).
-- Output = APENAS objetos JSON, um por linha, sem markdown e sem texto extra.
-- Chaves obrigatórias em cada objeto (exatamente estas): titulo, descricao, razao, transcript
+OUTPUT: objetos JSON, um por linha, SEM markdown. Chaves: titulo, descricao, razao, transcript
+{{"titulo":"Título curto viral (max 60 chars)","descricao":"Descrição 2-3 linhas com \\n para quebras. {url_instrucao} Hashtags no fim.","razao":"[GATILHO] nota de edição","transcript":"palavras exatas de abertura"}}
 
-FORMATO DE CADA OBJETO JSON (1 por linha):
-{{
-  "titulo": "Título curto (máx 60 caracteres), estilo YouTube, profissional e viral",
-  "descricao": "2-5 linhas, tom YouTube. Inclui SEMPRE o link do vídeo original numa linha separada: {video_url}. Inclui 3-6 hashtags no fim (ex: #Shorts #YouTubeShorts ...)",
-  "razao": "[GATILHO] Nota curta de edição (ex: corte seco, punch-in, legenda em destaque)",
-  "transcript": "Copia as palavras exatas de abertura (da transcrição) deste momento"
-}}
-
-Agora devolve APENAS as linhas JSON:"""
+Devolve APENAS JSON:"""
         
         # Chama o modelo via ollama.chat (suporta system message para todos os modelos)
         print(f"  ⏳ Aguardando resposta de {modelo}...", flush=True)
+        
+        if progress_callback:
+            progress_callback(50, f"Consultando {modelo}")
+        
         import time as _t2
         _t_llama = _t2.time()
         resposta = ollama.chat(
@@ -318,11 +413,14 @@ Agora devolve APENAS as linhas JSON:"""
             options={
                 "temperature": 0.2,
                 "top_p": 0.9,
-                "num_ctx": 8192  # Context window ampliado para melhor análise (8K tokens)
+                "num_ctx": 4096  # Menor = menos VRAM do KV-cache = mais rápido na GTX 1070
             }
         )
         _t_llama_end = _t2.time()
         print(f"  ✅ {modelo} respondeu em {_t_llama_end - _t_llama:.1f}s", flush=True)
+        
+        if progress_callback:
+            progress_callback(75, "Processando resposta")
 
         # ollama.chat devolve um objeto — o texto está em .message.content
         resposta_texto = resposta.message.content if hasattr(resposta, 'message') else resposta["message"]["content"]
@@ -336,17 +434,21 @@ Agora devolve APENAS as linhas JSON:"""
             texto_limpo = regex.sub(r'```(?:json)?\s*', '', resposta_texto)
             texto_limpo = texto_limpo.replace('```', '')
 
-            # Estratégia 1: regex greedy que apanha objectos com chaves aninhadas
-            # Encontra todos os {…} mesmo com strings longas dentro
-            for m in regex.finditer(r'\{(?:[^{}]|\{[^{}]*\})*\}', texto_limpo):
-                raw = m.group(0)
+            # Estratégia 1: extrator por balanceamento de chaves + reparação leve
+            for raw in _extract_json_objects_relaxed(texto_limpo):
                 try:
                     item = json.loads(raw)
                     # Aceita qualquer objecto que tenha título e razão
                     if item.get('titulo') or item.get('title'):
                         clipes.append(item)
                 except json.JSONDecodeError:
-                    pass
+                    try:
+                        fixed = _sanitize_json_object_text(raw)
+                        item = json.loads(fixed)
+                        if item.get('titulo') or item.get('title'):
+                            clipes.append(item)
+                    except json.JSONDecodeError:
+                        pass
 
             # Estratégia 2: linha por linha (quando o modelo separa por newlines)
             if not clipes:
@@ -358,7 +460,12 @@ Agora devolve APENAS as linhas JSON:"""
                             if item.get('titulo') or item.get('title'):
                                 clipes.append(item)
                         except json.JSONDecodeError:
-                            pass
+                            try:
+                                item = json.loads(_sanitize_json_object_text(linha))
+                                if item.get('titulo') or item.get('title'):
+                                    clipes.append(item)
+                            except json.JSONDecodeError:
+                                pass
 
             # Estratégia 3: array JSON
             if not clipes:
@@ -372,10 +479,25 @@ Agora devolve APENAS as linhas JSON:"""
                         pass
 
             if clipes:
+                # Remove duplicados por título/transcript
+                uniq = []
+                seen = set()
+                for c in clipes:
+                    key = ((c.get('titulo') or c.get('title') or '').strip().lower(), (c.get('transcript') or '').strip().lower())
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    uniq.append(c)
+                clipes = uniq
+
                 print(f"✅ Análise concluída! {len(clipes)} clipes recomendados:")
                 for i, clipe in enumerate(clipes, 1):
                     titulo = clipe.get('titulo') or clipe.get('title', 'Sem título')
                     print(f"  {i}. {titulo}")
+                
+                if progress_callback:
+                    progress_callback(100, f"{len(clipes)} clips encontrados")
+                
                 return clipes
 
             # Nenhuma estratégia funcionou

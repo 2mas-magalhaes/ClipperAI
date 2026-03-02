@@ -28,6 +28,7 @@ def _default_db():
             "whisper_model_cpu": "small",
             "default_channel_id": None,
             "auto_publish": False,
+            "auto_scan_interval_minutes": 30,
             "max_clips_per_video": 7,
             "clip_duration_min": 30,
             "clip_duration_max": 60,
@@ -105,6 +106,7 @@ def add_to_queue(url, title="", channel_id=None, priority=0, auto_publish=None):
             "clips_done": 0,
             "clips": [],
             "error_msg": "",
+            "duration_seconds": None,
             "created_at": datetime.now().isoformat(),
             "started_at": None,
             "finished_at": None,
@@ -135,6 +137,7 @@ def add_to_queue_with_meta(url, title="", channel_id=None, priority=0, source_vi
             "clips_done": 0,
             "clips": [],
             "error_msg": "",
+            "duration_seconds": None,
             "created_at": datetime.now().isoformat(),
             "started_at": None,
             "finished_at": None,
@@ -417,6 +420,8 @@ def add_review_clip(
     channel_id=None,
     reason="",
     youtube_meta=None,
+    source_channel_name="",
+    source_url="",
 ):
     with _lock:
         db = _load()
@@ -428,6 +433,8 @@ def add_review_clip(
             "channel_id": channel_id,
             "reason": reason,
             "youtube": youtube_meta or {},
+            "source_channel_name": source_channel_name,
+            "source_url": source_url,
             "status": "pending",  # pending, published, rejected
             "created_at": datetime.now().isoformat(),
             "published_at": None,
@@ -514,6 +521,15 @@ def get_settings():
     with _lock:
         db = _load()
         return db.get("settings", _default_db()["settings"])
+
+
+def save_settings(settings):
+    """Salva um dicionário completo de definições."""
+    with _lock:
+        db = _load()
+        db["settings"] = settings
+        _save(db)
+        return db["settings"]
 
 
 def update_settings(**kwargs):

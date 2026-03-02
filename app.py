@@ -15,16 +15,40 @@ if os.path.exists(VENV_PYTHON) and os.path.abspath(sys.executable).lower() != os
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
+# Configurar logging para aparecer no terminal
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)-8s | %(message)s',
+    datefmt='%H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
 import json
 import subprocess
 import shutil
 from datetime import datetime, timedelta, timezone
 from flask import Flask, render_template, request, jsonify, send_from_directory
+from werkzeug.utils import secure_filename
+import uuid
+import shutil as shell_utils
 
 import database as db
 from worker import worker
+from auto_manager import auto_manager, configure_auto_manager
+
+try:
+    import proxy_rotator
+    _HAS_PROXY = True
+except ImportError:
+    _HAS_PROXY = False
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
+
+# Cache buster para forçar reload de JS/CSS em desenvolvimento
+import time
+CACHE_BUST = str(int(time.time()))
 
 
 def _silenciar_logs_http():
@@ -32,7 +56,7 @@ def _silenciar_logs_http():
     werkzeug_log = logging.getLogger("werkzeug")
     werkzeug_log.setLevel(logging.ERROR)
     werkzeug_log.disabled = True
-    app.logger.setLevel(logging.ERROR)
+    app.logger.setLevel(logging.INFO)
 
 
 def _parse_upload_date(date_str):
@@ -83,34 +107,197 @@ def _normalize_channel_url(url):
 
 
 def _extract_channel_thumbnail(channel_url):
-    """Extrai a foto do canal a partir da URL.
-    Retorna a URL da thumbnail ou string vazia.
-    """
+    """Extrai a foto do canal via yt-dlp (avatar real do YouTube)."""
     if not channel_url:
         return ""
-    
     try:
-        # Tenta extrair o handle ou channel ID
-        # @handle format: https://youtube.com/@handle
-        handle_match = re.search(r'/@([^/?]+)', channel_url)
-        if handle_match:
-            handle = handle_match.group(1)
-            # Thumbnail baseada no handle (pode não funcionar sempre)
-            return f"https://www.youtube.com/ytimg/www_unauthenticated/img/emotes/emotes_placeholder.png"
-        
-        # Channel ID format: https://www.youtube.com/channel/UCxxxxx
-        channel_match = re.search(r'/channel/([A-Za-z0-9_-]+)', channel_url)
-        if channel_match:
-            channel_id = channel_match.group(1)
-            # Usar o channel ID para construir uma URL de thumbnail
-            # YouTube torna disponível: https://yt4.ggpht.com/[channel_id]
-            # Mas a forma mais comum é sem thumbnail direto
-            # Fallback vazio - a UI usa o ícone do YouTube
-            return ""
-        
+        import yt_dlp
+        clean_url = re.split(r'[?&]', channel_url)[0].rstrip('/')
+        clean_url = re.sub(r'/(videos|shorts|streams|featured|playlists|community|about)$', '', clean_url)
+        ydl_opts = {
+            "quiet": True,
+            "skip_download": True,
+            "extract_flat": True,
+            "playlistend": 1,
+            "ignoreerrors": True,
+            "no_warnings": True,
+        }
+        # Tenta sem /videos primeiro (funciona mesmo para canais sem vídeos)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(clean_url, download=False) or {}
+        # yt-dlp devolve os thumbnails do canal no campo 'thumbnails'
+        for t in reversed(info.get("thumbnails") or []):
+            url = t.get("url", "")
+            if url and ("yt3.ggpht" in url or "yt3.googleusercontent" in url or "yt4.ggpht" in url):
+                return url
+        # Fallback: channel avatar no campo uploader_url etc.
+        for key in ("channel_thumbnail", "avatar", "thumbnail"):
+            val = info.get(key)
+            if val:
+                return val
         return ""
     except Exception:
         return ""
+
+
+def _get_youtube_service(credentials_path, token_path=None):
+    """Cria um serviço YouTube autenticado via OAuth2.
+    Retorna (service, logs) onde logs é uma lista de strings."""
+    import google_auth_oauthlib.flow
+    import google.oauth2.credentials
+    from googleapiclient.discovery import build
+
+    logs = []
+    if not token_path:
+        token_path = credentials_path.replace(".json", "_token.json")
+
+    creds = None
+
+    # Tenta carregar token existente
+    if os.path.exists(token_path):
+        try:
+            creds = google.oauth2.credentials.Credentials.from_authorized_user_file(
+                token_path,
+                scopes=["https://www.googleapis.com/auth/youtube",
+                         "https://www.googleapis.com/auth/youtube.upload"]
+            )
+            logs.append("Token OAuth existente encontrado")
+        except Exception as e:
+            logs.append(f"Token existente inválido: {e}")
+            creds = None
+
+    # Se o token expirou, tenta fazer refresh
+    if creds and creds.expired and creds.refresh_token:
+        try:
+            import google.auth.transport.requests
+            creds.refresh(google.auth.transport.requests.Request())
+            logs.append("Token renovado com sucesso")
+            with open(token_path, 'w') as f:
+                f.write(creds.to_json())
+        except Exception as e:
+            logs.append(f"Falha ao renovar token: {e}")
+            creds = None
+
+    # Se não há creds válidas, precisa de fluxo OAuth
+    if not creds or not creds.valid:
+        logs.append("A iniciar fluxo de autenticação OAuth...")
+        logs.append("AVISO: Se a app estiver em modo 'Testing' no Google Cloud,")
+        logs.append("  adiciona o teu email como utilizador de teste primeiro!")
+        try:
+            # Permitir HTTP para localhost (necessário quando não há HTTPS)
+            os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+            flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(
+                credentials_path,
+                scopes=["https://www.googleapis.com/auth/youtube",
+                         "https://www.googleapis.com/auth/youtube.upload"]
+            )
+            creds = flow.run_local_server(
+                port=8090,
+                prompt="consent",
+                success_message="Autenticação concluída! Pode fechar esta janela.",
+                open_browser=True,
+            )
+            logs.append("Autenticação OAuth concluída com sucesso!")
+            # Guarda o token para futura utilização
+            with open(token_path, 'w') as f:
+                f.write(creds.to_json())
+            logs.append(f"Token guardado em: {token_path}")
+        except Exception as e:
+            error_str = str(e)
+            if "access_denied" in error_str.lower():
+                logs.append("FALHOU: Acesso negado pelo Google (403: access_denied)")
+                logs.append("")
+                logs.append("→ A tua app Google Cloud está em modo 'Testing'.")
+                logs.append("→ Precisas de adicionar o teu email como utilizador de teste:")
+                logs.append("  1. Vai a https://console.cloud.google.com")
+                logs.append("  2. Seleciona o projeto 'ClipAI'")
+                logs.append("  3. Vai a 'APIs & Services' → 'OAuth consent screen'")
+                logs.append("  4. Na secção 'Test users', clica em '+ Add Users'")
+                logs.append("  5. Adiciona o teu email (ex: tomasmaga115@gmail.com)")
+                logs.append("  6. Guarda e tenta novamente")
+                logs.append("")
+                logs.append("→ Alternativa: publica a app (muda de 'Testing' para 'In Production')")
+            else:
+                logs.append(f"FALHOU: Erro na autenticação OAuth: {e}")
+            return None, logs
+
+    # Cria o serviço YouTube
+    try:
+        service = build("youtube", "v3", credentials=creds)
+        logs.append("Serviço YouTube API v3 criado com sucesso")
+        return service, logs
+    except Exception as e:
+        logs.append(f"ERRO ao criar serviço YouTube: {e}")
+        return None, logs
+
+
+def _upload_video_to_youtube(service, video_path, title, description="", tags=None, category="22", privacy="private"):
+    """Faz upload de um vídeo para o YouTube.
+    Retorna (video_id, url, logs)."""
+    from googleapiclient.http import MediaFileUpload
+    logs = []
+
+    if not os.path.exists(video_path):
+        logs.append(f"ERRO: Ficheiro não encontrado: {video_path}")
+        return None, None, logs
+
+    file_size = os.path.getsize(video_path)
+    logs.append(f"Ficheiro: {os.path.basename(video_path)} ({file_size / 1024 / 1024:.1f} MB)")
+
+    body = {
+        "snippet": {
+            "title": title[:100],
+            "description": description[:5000],
+            "tags": tags or [],
+            "categoryId": category,
+        },
+        "status": {
+            "privacyStatus": privacy,
+            "selfDeclaredMadeForKids": False,
+        },
+    }
+
+    logs.append(f"Título: {title[:100]}")
+    logs.append(f"Privacidade: {privacy}")
+    logs.append("A iniciar upload...")
+    
+    import logging
+    logging.info(f"📤 INICIANDO UPLOAD PARA YOUTUBE")
+    logging.info(f"   Título: {title[:100]}")
+    logging.info(f"   Tamanho: {file_size / 1024 / 1024:.1f} MB")
+    logging.info(f"   Privacidade: {privacy}")
+
+    try:
+        media = MediaFileUpload(video_path, chunksize=1024 * 1024, resumable=True)
+        req = service.videos().insert(part="snippet,status", body=body, media_body=media)
+
+        response = None
+        last_logged_pct = 0
+        while response is None:
+            status, response = req.next_chunk()
+            if status:
+                pct = int(status.progress() * 100)
+                # Log detalhado no terminal a cada 10%
+                if pct >= last_logged_pct + 10:
+                    logging.info(f"   📤 Upload: {pct}% ({status.resumable_progress / 1024 / 1024:.1f} MB)")
+                    last_logged_pct = pct
+                # Log simplificado para interface
+                logs.append(f"Upload: {pct}%")
+
+        video_id = response.get("id", "")
+        url = f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
+        logs.append(f"Upload concluído! ID: {video_id}")
+        logs.append(f"URL: {url}")
+        logging.info(f"✅ UPLOAD CONCLUÍDO!")
+        logging.info(f"   ID: {video_id}")
+        logging.info(f"   URL: {url}")
+        return video_id, url, logs
+    except Exception as e:
+        logs.append(f"ERRO no upload: {e}")
+        logging.error(f"❌ ERRO NO UPLOAD: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return None, None, logs
 
 
 def _yt_extract_flat(source_url, max_entries=10):
@@ -270,7 +457,7 @@ def _scan_followed_channel(follow_item):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", cache_bust=CACHE_BUST)
 
 
 # ═══════════════════════════════════════════════
@@ -298,6 +485,91 @@ def api_add_to_queue():
     return jsonify(item), 201
 
 
+@app.route("/api/queue/upload", methods=["POST"])
+def api_upload_local_video():
+    """Upload de ficheiro de vídeo local para a queue."""
+    try:
+        # Validar ficheiro
+        if 'file' not in request.files:
+            return jsonify({"message": "Nenhum ficheiro selecionado"}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({"message": "Ficheiro vazio"}), 400
+        
+        # Validar tamanho (máximo 4GB)
+        max_size = 4 * 1024 * 1024 * 1024
+        file.seek(0, 2)  # Ir para o fim
+        size = file.tell()
+        file.seek(0)  # Voltar ao início
+        
+        if size > max_size:
+            return jsonify({"message": f"Ficheiro muito grande ({size / (1024**3):.2f}GB, máximo 4GB)"}), 413
+        
+        # Criar diretório de uploads se não existir
+        upload_dir = "downloads/uploads"
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        # Gerar nome único para o ficheiro
+        ext = os.path.splitext(secure_filename(file.filename))[1]
+        unique_filename = f"uploaded_{uuid.uuid4().hex}{ext}"
+        filepath = os.path.join(upload_dir, unique_filename)
+        
+        # Guardar ficheiro
+        file.save(filepath)
+        
+        # Obter dados do formulário
+        title = request.form.get('title', 'Vídeo Carregado').strip()
+        channel_id = request.form.get('channel_id') or None
+        auto_publish = request.form.get('auto_publish') == '1'
+        
+        # Dados originais do YouTube (se disponíveis)
+        origin_title = request.form.get('origin_title', '').strip()
+        origin_url = request.form.get('origin_url', '').strip()
+        origin_channel_name = request.form.get('origin_channel_name', '').strip()
+        origin_channel_url = request.form.get('origin_channel_url', '').strip()
+        
+        # Obter tamanho real do ficheiro guardado
+        file_size = os.path.getsize(filepath)
+        
+        # Adicionar à queue como URL local (com prefixo especial)
+        item = db.add_to_queue(
+            url=f"local://{filepath}",
+            title=title or os.path.splitext(file.filename)[0],
+            channel_id=channel_id,
+            auto_publish=auto_publish,
+        )
+        
+        # Guardar dados originais no item (para usar na descrição depois)
+        if origin_title or origin_url:
+            # Atualizar o item com metadados originais
+            item['origin_title'] = origin_title
+            item['origin_url'] = origin_url
+            item['origin_channel_name'] = origin_channel_name
+            item['origin_channel_url'] = origin_channel_url
+            db.update_queue_item(item['id'], 
+                origin_title=origin_title,
+                origin_url=origin_url,
+                origin_channel_name=origin_channel_name,
+                origin_channel_url=origin_channel_url
+            )
+        
+        # Log
+        logging.info(f"✅ Upload de vídeo: {unique_filename} ({file_size / (1024**2):.2f}MB) → {title}")
+        if origin_title:
+            logging.info(f"   Origem: {origin_title} ({origin_channel_name})")
+        
+        return jsonify({
+            "message": "Vídeo enviado com sucesso",
+            "item": item,
+            "size": file_size,
+        }), 201
+        
+    except Exception as e:
+        logging.error(f"❌ Erro no upload: {e}")
+        return jsonify({"message": f"Erro: {str(e)}"}), 500
+
+
 @app.route("/api/queue/clear", methods=["DELETE"])
 def api_clear_queue():
     """Remove todos os vídeos da queue."""
@@ -305,6 +577,60 @@ def api_clear_queue():
     for item in queue:
         db.remove_from_queue(item["id"])
     return jsonify({"ok": True, "cleared": len(queue)})
+
+
+@app.route("/api/queue/bulk", methods=["POST"])
+def api_bulk_queue():
+    """Operações em massa na queue: alterar canal, visibilidade, auto-publish, apagar."""
+    data = request.json or {}
+    ids = data.get("ids", [])
+    action = data.get("action", "")
+
+    if not ids:
+        return jsonify({"error": "Nenhum item selecionado"}), 400
+
+    results = {"updated": 0, "deleted": 0, "errors": []}
+
+    if action == "delete":
+        for item_id in ids:
+            try:
+                db.remove_from_queue(item_id)
+                results["deleted"] += 1
+            except Exception as e:
+                results["errors"].append(str(e))
+
+    elif action == "set_channel":
+        channel_id = data.get("channel_id")
+        for item_id in ids:
+            r = db.update_queue_item(item_id, channel_id=channel_id or None)
+            if r:
+                results["updated"] += 1
+
+    elif action == "set_auto_publish":
+        value = bool(data.get("auto_publish", data.get("value", False)))
+        for item_id in ids:
+            r = db.update_queue_item(item_id, auto_publish=value)
+            if r:
+                results["updated"] += 1
+
+    elif action == "set_privacy":
+        privacy = data.get("default_privacy", data.get("privacy", "private"))
+        for item_id in ids:
+            r = db.update_queue_item(item_id, default_privacy=privacy)
+            if r:
+                results["updated"] += 1
+
+    elif action == "retry":
+        for item_id in ids:
+            r = db.update_queue_item(item_id, status="queued", progress=0, error_msg="", status_detail="")
+            if r:
+                results["updated"] += 1
+
+    else:
+        return jsonify({"error": f"Ação desconhecida: {action}"}), 400
+
+    total = results["updated"] + results["deleted"]
+    return jsonify({"ok": True, "message": f"{total} item(s) atualizados", **results})
 
 
 @app.route("/api/queue/<item_id>", methods=["DELETE"])
@@ -320,6 +646,30 @@ def api_update_queue_item(item_id):
     if item:
         return jsonify(item)
     return jsonify({"error": "Item não encontrado"}), 404
+
+
+@app.route("/api/queue/<item_id>/cancel", methods=["POST"])
+def api_cancel_queue_item(item_id):
+    """Cancela um vídeo que está sendo processado."""
+    item = db.get_queue()
+    found_item = None
+    for q in item:
+        if q["id"] == item_id:
+            found_item = q
+            break
+    
+    if not found_item:
+        return jsonify({"error": "Item não encontrado"}), 404
+    
+    # Verifica se está em processamento
+    status = found_item.get("status")
+    if status not in ("downloading", "analyzing", "editing"):
+        return jsonify({"error": f"Não é possível cancelar vídeo com status: {status}"}), 400
+    
+    # Marca para cancelamento
+    worker.cancel(item_id)
+    
+    return jsonify({"ok": True, "message": "Cancelamento iniciado..."})
 
 
 @app.route("/api/queue/reorder", methods=["POST"])
@@ -395,12 +745,35 @@ def api_add_channel():
         description=data.get("description", ""),
     )
     
-    # Tenta extrair a thumbnail do canal
+    # Extrai thumbnail e info do canal via yt-dlp (síncrono para devolver já)
     if channel_url:
-        thumbnail = _extract_channel_thumbnail(channel_url)
-        if thumbnail:
-            ch = db.update_channel(ch["id"], channel_thumbnail=thumbnail)
-    
+        try:
+            import yt_dlp
+            clean_url = re.split(r'[?&]', channel_url)[0].rstrip('/')
+            clean_url = re.sub(r'/(videos|shorts|streams|featured|playlists|community|about)$', '', clean_url)
+            ydl_opts = {
+                "quiet": True, "skip_download": True, "extract_flat": True,
+                "playlistend": 1, "ignoreerrors": True, "no_warnings": True,
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(clean_url, download=False) or {}
+            update_data = {}
+            for t in reversed(info.get("thumbnails") or []):
+                url = t.get("url", "")
+                if url and ("yt3.ggpht" in url or "yt3.googleusercontent" in url):
+                    update_data["channel_thumbnail"] = url
+                    break
+            if info.get("channel"):
+                update_data["youtube_channel_name"] = info["channel"]
+            if info.get("channel_id"):
+                update_data["youtube_channel_id"] = info["channel_id"]
+            if info.get("channel_follower_count"):
+                update_data["youtube_subscribers"] = str(info["channel_follower_count"])
+            if update_data:
+                ch = db.update_channel(ch["id"], **update_data)
+        except Exception:
+            pass
+
     return jsonify(ch), 201
 
 
@@ -421,63 +794,423 @@ def api_delete_channel(channel_id):
 
 @app.route("/api/channels/<channel_id>/test-publish", methods=["POST"])
 def api_test_channel_publish(channel_id):
-    """Testa se é possível publicar vídeos no canal."""
+    """Testa se é possível publicar vídeos no canal — teste completo com logs."""
     channel = None
     for ch in db.get_channels():
         if ch["id"] == channel_id:
             channel = ch
             break
-    
+
     if not channel:
-        return jsonify({"error": "Canal não encontrado"}), 404
-    
-    # Verifica se temcredenciais
+        return jsonify({"success": False, "logs": ["ERRO: Canal não encontrado"]}), 404
+
+    logs = []
+    logs.append(f"=== Teste de publicação: {channel['name']} ===")
+    logs.append("")
+
+    # ── Passo 1: Verificar credenciais ──
+    logs.append("[1/5] A verificar ficheiro de credenciais...")
     creds_path = channel.get("credentials_path", "").strip()
     if not creds_path:
-        return jsonify({
-            "success": False,
-            "error": "Canal não tem credenciais configuradas",
-            "message": "Configura o caminho para client_secrets.json"
-        }), 400
-    
-    # Verifica se o ficheiro de credenciais existe
+        logs.append("FALHOU: Canal não tem credenciais configuradas")
+        logs.append("→ Vai às definições do canal e adiciona o caminho para client_secrets.json")
+        return jsonify({"success": False, "logs": logs})
+
     if not os.path.exists(creds_path):
-        return jsonify({
-            "success": False,
-            "error": "Ficheiro de credenciais não encontrado",
-            "message": f"Verifica o caminho: {creds_path}"
-        }), 400
-    
+        logs.append(f"FALHOU: Ficheiro não encontrado: {creds_path}")
+        logs.append("→ Verifica se o caminho está correto")
+        return jsonify({"success": False, "logs": logs})
+
+    logs.append(f"OK — Ficheiro encontrado: {os.path.basename(creds_path)}")
+
+    # ── Passo 2: Validar formato JSON ──
+    logs.append("")
+    logs.append("[2/5] A validar formato do ficheiro...")
     try:
-        # Tenta fazer um teste simples de autenticação
-        # (sem tentar fazer upload efetivo)
-        import json
         with open(creds_path, 'r') as f:
             creds_data = json.load(f)
-        
-        if not creds_data or 'client_id' not in creds_data:
-            return jsonify({
-                "success": False,
-                "error": "Ficheiro de credenciais inválido ou corrompido"
-            }), 400
-        
-        # Se conseguiu ler as credenciais, o teste passou
+        # Pode ser formato "installed" ou "web"
+        inner = creds_data.get("installed") or creds_data.get("web") or creds_data
+        client_id = inner.get("client_id", "")
+        client_secret = inner.get("client_secret", "")
+        if not client_id or not client_secret:
+            logs.append("FALHOU: client_id ou client_secret em falta")
+            return jsonify({"success": False, "logs": logs})
+        logs.append(f"OK — client_id: {client_id[:25]}...")
+        logs.append(f"OK — project_id: {inner.get('project_id', 'N/A')}")
+    except json.JSONDecodeError:
+        logs.append("FALHOU: Ficheiro JSON inválido ou corrompido")
+        return jsonify({"success": False, "logs": logs})
+    except Exception as e:
+        logs.append(f"FALHOU: {e}")
+        return jsonify({"success": False, "logs": logs})
+
+    # ── Passo 3: Autenticação OAuth ──
+    logs.append("")
+    logs.append("[3/5] A autenticar com Google OAuth 2.0...")
+    try:
+        service, auth_logs = _get_youtube_service(creds_path)
+        logs.extend(auth_logs)
+        if not service:
+            logs.append("FALHOU: Não foi possível autenticar")
+            return jsonify({"success": False, "logs": logs})
+        logs.append("OK — Autenticação bem-sucedida!")
+    except Exception as e:
+        logs.append(f"FALHOU: Erro na autenticação: {e}")
+        return jsonify({"success": False, "logs": logs})
+
+    # ── Passo 4: Obter informações do canal ──
+    logs.append("")
+    logs.append("[4/5] A obter informações do canal YouTube...")
+    try:
+        resp = service.channels().list(part="snippet,statistics,brandingSettings", mine=True).execute()
+        items = resp.get("items", [])
+        if not items:
+            logs.append("AVISO: Nenhum canal encontrado para esta conta")
+            logs.append("→ A conta pode não ter um canal YouTube associado")
+            return jsonify({"success": False, "logs": logs})
+
+        yt_channel = items[0]
+        snippet = yt_channel.get("snippet", {})
+        stats = yt_channel.get("statistics", {})
+        yt_name = snippet.get("title", "N/A")
+        yt_subs = stats.get("subscriberCount", "N/A")
+        yt_videos = stats.get("videoCount", "N/A")
+        yt_views = stats.get("viewCount", "N/A")
+        yt_thumbnail = ""
+        thumbs = snippet.get("thumbnails", {})
+        for size in ("high", "medium", "default"):
+            if size in thumbs:
+                yt_thumbnail = thumbs[size].get("url", "")
+                break
+        yt_channel_id = yt_channel.get("id", "")
+
+        logs.append(f"OK — Canal: {yt_name}")
+        logs.append(f"OK — ID: {yt_channel_id}")
+        logs.append(f"OK — Subscritores: {yt_subs}")
+        logs.append(f"OK — Vídeos: {yt_videos}")
+        logs.append(f"OK — Views totais: {yt_views}")
+
+        # Atualiza a thumbnail e nome do canal na BD
+        update_data = {}
+        if yt_thumbnail:
+            update_data["channel_thumbnail"] = yt_thumbnail
+        if yt_channel_id:
+            update_data["youtube_channel_id"] = yt_channel_id
+        if yt_name:
+            update_data["youtube_channel_name"] = yt_name
+        if yt_subs and yt_subs != "N/A":
+            update_data["youtube_subscribers"] = yt_subs
+        if yt_videos and yt_videos != "N/A":
+            update_data["youtube_video_count"] = yt_videos
+        if yt_views and yt_views != "N/A":
+            update_data["youtube_view_count"] = yt_views
+        if update_data:
+            db.update_channel(channel_id, **update_data)
+
+    except Exception as e:
+        logs.append(f"AVISO: Não foi possível obter info do canal: {e}")
+        logs.append("→ O upload pode funcionar mesmo assim")
+
+    # ── Passo 5: Verificar permissões de upload ──
+    logs.append("")
+    logs.append("[5/5] A verificar permissões de upload...")
+    try:
+        # Testa listando categorias de vídeo (operação read-only segura)
+        cats = service.videoCategories().list(part="snippet", regionCode="PT").execute()
+        if cats.get("items"):
+            logs.append(f"OK — API YouTube acessível ({len(cats['items'])} categorias)")
+        else:
+            logs.append("OK — API YouTube acessível")
+        logs.append("")
+        logs.append("=== TESTE CONCLUÍDO COM SUCESSO ===")
+        logs.append(f"O canal '{channel['name']}' está pronto para publicar vídeos!")
         return jsonify({
             "success": True,
-            "message": f"Canal '{channel['name']}' pronto para publicação!",
-            "client_id": creds_data.get('client_id', '')[:20] + '...'
-        }), 200
-    except json.JSONDecodeError:
-        return jsonify({
-            "success": False,
-            "error": "Ficheiro JSON inválido",
-            "message": "Verifica o formato do ficheiro client_secrets.json"
-        }), 400
+            "logs": logs,
+            "channel_info": {
+                "name": yt_name if 'yt_name' in dir() else channel["name"],
+                "thumbnail": yt_thumbnail if 'yt_thumbnail' in dir() else "",
+                "subscribers": yt_subs if 'yt_subs' in dir() else "0",
+            }
+        })
     except Exception as e:
+        logs.append(f"AVISO: Erro ao verificar permissões: {e}")
+        logs.append("")
+        logs.append("=== TESTE CONCLUÍDO COM AVISOS ===")
+        logs.append("A autenticação funcionou mas podem existir limitações na API")
+        return jsonify({"success": True, "logs": logs, "warnings": True})
+
+
+@app.route("/api/channels/<channel_id>/reauth", methods=["POST"])
+def api_reauth_channel(channel_id):
+    """Remove token existente e força nova autenticação OAuth (para trocar de conta Google)."""
+    channel = None
+    for ch in db.get_channels():
+        if ch["id"] == channel_id:
+            channel = ch
+            break
+
+    if not channel:
+        return jsonify({"ok": False, "error": "Canal não encontrado"}), 404
+
+    creds_path = channel.get("credentials_path", "").strip()
+    if not creds_path or not os.path.exists(creds_path):
+        return jsonify({"ok": False, "error": "Canal sem credenciais OAuth configuradas"}), 400
+
+    # Remover tokens existentes para forçar novo login
+    token_path = creds_path.replace(".json", "_token.json")
+    pickle_path = creds_path.replace(".json", "_token.pickle")
+    removed = []
+    for tp in [token_path, pickle_path]:
+        if os.path.exists(tp):
+            try:
+                os.remove(tp)
+                removed.append(os.path.basename(tp))
+            except Exception as e:
+                logging.error(f"Erro ao remover token {tp}: {e}")
+
+    if removed:
+        logging.info(f"🗑️ Tokens removidos para reauth: {', '.join(removed)}")
+
+    # Iniciar novo fluxo OAuth (abre browser para login com outra conta)
+    try:
+        service, auth_logs = _get_youtube_service(creds_path)
+        if not service:
+            return jsonify({"ok": False, "error": "Autenticação falhou. Verifica os logs.", "logs": auth_logs}), 400
+
+        # Obter info do novo canal
+        resp = service.channels().list(part="snippet,statistics", mine=True).execute()
+        items = resp.get("items", [])
+        if items:
+            snippet = items[0].get("snippet", {})
+            stats = items[0].get("statistics", {})
+            yt_name = snippet.get("title", "")
+            yt_channel_id = items[0].get("id", "")
+            yt_subs = stats.get("subscriberCount", "")
+            yt_videos = stats.get("videoCount", "")
+            yt_views = stats.get("viewCount", "")
+            yt_thumbnail = ""
+            for size in ("high", "medium", "default"):
+                if size in snippet.get("thumbnails", {}):
+                    yt_thumbnail = snippet["thumbnails"][size].get("url", "")
+                    break
+
+            update_data = {}
+            if yt_thumbnail:
+                update_data["channel_thumbnail"] = yt_thumbnail
+            if yt_channel_id:
+                update_data["youtube_channel_id"] = yt_channel_id
+            if yt_name:
+                update_data["youtube_channel_name"] = yt_name
+            if yt_subs:
+                update_data["youtube_subscribers"] = yt_subs
+            if yt_videos:
+                update_data["youtube_video_count"] = yt_videos
+            if yt_views:
+                update_data["youtube_view_count"] = yt_views
+            if update_data:
+                db.update_channel(channel_id, **update_data)
+
+            return jsonify({"ok": True, "message": f"Conta trocada para: {yt_name}", "channel_name": yt_name})
+
+        return jsonify({"ok": True, "message": "Autenticado com sucesso"})
+
+    except Exception as e:
+        logging.exception("Erro no reauth")
+        return jsonify({"ok": False, "error": str(e)[:200]}), 500
+
+
+@app.route("/api/channels/<channel_id>/refresh-info", methods=["POST"])
+def api_refresh_channel_info(channel_id):
+    """Atualiza thumbnail e info do canal via yt-dlp (sem precisar de OAuth)."""
+    channel = None
+    for ch in db.get_channels():
+        if ch["id"] == channel_id:
+            channel = ch
+            break
+    if not channel:
+        return jsonify({"error": "Canal não encontrado"}), 404
+
+    channel_url = channel.get("channel_url", "").strip()
+    if not channel_url:
+        return jsonify({"error": "Canal sem URL configurado"}), 400
+
+    update_data = {}
+    try:
+        import yt_dlp
+        clean_url = re.split(r'[?&]', channel_url)[0].rstrip('/')
+        clean_url = re.sub(r'/(videos|shorts|streams|featured|playlists|community|about)$', '', clean_url)
+        ydl_opts = {
+            "quiet": True, "skip_download": True, "extract_flat": True,
+            "playlistend": 1, "ignoreerrors": True, "no_warnings": True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(clean_url, download=False) or {}
+
+        # Thumbnail
+        for t in reversed(info.get("thumbnails") or []):
+            url = t.get("url", "")
+            if url and ("yt3.ggpht" in url or "yt3.googleusercontent" in url):
+                update_data["channel_thumbnail"] = url
+                break
+
+        # Outros dados
+        if info.get("channel"):
+            update_data["youtube_channel_name"] = info["channel"]
+        if info.get("channel_id"):
+            update_data["youtube_channel_id"] = info["channel_id"]
+        if info.get("channel_follower_count"):
+            update_data["youtube_subscribers"] = str(info["channel_follower_count"])
+        if info.get("description"):
+            if not channel.get("description"):
+                update_data["description"] = info["description"][:500]
+    except Exception as e:
+        return jsonify({"error": f"Erro ao extrair info: {e}"}), 500
+
+    if update_data:
+        ch = db.update_channel(channel_id, **update_data)
+        return jsonify({"ok": True, "channel": ch})
+    return jsonify({"ok": True, "message": "Nenhuma informação nova encontrada"})
+
+
+@app.route("/api/channels/<channel_id>/videos", methods=["GET"])
+def api_get_channel_videos(channel_id):
+    """Obtém os últimos vídeos do canal via yt-dlp."""
+    channel = None
+    for ch in db.get_channels():
+        if ch["id"] == channel_id:
+            channel = ch
+            break
+    if not channel:
+        return jsonify({"error": "Canal não encontrado"}), 404
+
+    channel_url = channel.get("channel_url", "").strip()
+    if not channel_url:
+        return jsonify({"error": "Canal sem URL configurado", "videos": []}), 400
+
+    try:
+        import yt_dlp
+        # Normaliza para /videos
+        videos_url = _normalize_channel_url(channel_url)
+        ydl_opts = {
+            "quiet": True,
+            "skip_download": True,
+            "extract_flat": True,
+            "playlistend": 12,
+            "ignoreerrors": True,
+            "no_warnings": True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(videos_url, download=False) or {}
+
+        entries = info.get("entries") or []
+        videos = []
+        for entry in entries:
+            if not entry:
+                continue
+            vid_id = entry.get("id", "")
+            if len(vid_id) != 11:
+                continue
+            # Melhor thumbnail
+            thumb = ""
+            for t in reversed(entry.get("thumbnails") or []):
+                if t.get("url"):
+                    thumb = t["url"]
+                    break
+            if not thumb:
+                thumb = f"https://i.ytimg.com/vi/{vid_id}/hqdefault.jpg"
+
+            duration = entry.get("duration")
+            if duration:
+                mins, secs = divmod(int(duration), 60)
+                hrs, mins = divmod(mins, 60)
+                dur_str = f"{hrs}:{mins:02d}:{secs:02d}" if hrs else f"{mins}:{secs:02d}"
+            else:
+                dur_str = ""
+
+            view_count = entry.get("view_count")
+            upload_date = entry.get("upload_date") or ""
+            # Formatar data
+            date_str = ""
+            if upload_date and len(upload_date) == 8:
+                date_str = f"{upload_date[6:8]}/{upload_date[4:6]}/{upload_date[:4]}"
+
+            videos.append({
+                "id": vid_id,
+                "title": (entry.get("title") or f"Vídeo {vid_id}").strip(),
+                "thumbnail": thumb,
+                "url": f"https://www.youtube.com/watch?v={vid_id}",
+                "views": view_count,
+                "duration": dur_str,
+                "date": date_str,
+                "upload_date": upload_date,
+            })
+
+        # Também atualiza estatísticas do canal com info do yt-dlp
+        update_data = {}
+        if info.get("channel_follower_count"):
+            update_data["youtube_subscribers"] = str(info["channel_follower_count"])
+        # Conta de vídeos: contamos os entries mas pode haver mais
+        for t in reversed(info.get("thumbnails") or []):
+            url = t.get("url", "")
+            if url and ("yt3.ggpht" in url or "yt3.googleusercontent" in url):
+                update_data["channel_thumbnail"] = url
+                break
+        if update_data:
+            db.update_channel(channel_id, **update_data)
+
+        return jsonify({"videos": videos})
+
+    except Exception as e:
+        return jsonify({"error": f"Erro ao buscar vídeos: {e}", "videos": []}), 500
+
+
+@app.route("/api/channels/<channel_id>/upload", methods=["POST"])
+def api_upload_video(channel_id):
+    """Faz upload de um vídeo para o YouTube."""
+    channel = None
+    for ch in db.get_channels():
+        if ch["id"] == channel_id:
+            channel = ch
+            break
+    if not channel:
+        return jsonify({"error": "Canal não encontrado"}), 404
+
+    data = request.json or {}
+    video_path = data.get("video_path", "").strip()
+    title = data.get("title", "Clip").strip()
+    description = data.get("description", "").strip()
+    tags = data.get("tags", [])
+    privacy = data.get("privacy", "private")
+
+    if not video_path or not os.path.exists(video_path):
+        return jsonify({"error": "Caminho do vídeo inválido"}), 400
+
+    creds_path = channel.get("credentials_path", "").strip()
+    if not creds_path:
+        return jsonify({"error": "Canal sem credenciais configuradas"}), 400
+
+    service, auth_logs = _get_youtube_service(creds_path)
+    if not service:
+        return jsonify({"error": "Falha na autenticação", "logs": auth_logs}), 400
+
+    video_id, url, upload_logs = _upload_video_to_youtube(
+        service, video_path, title, description, tags, privacy=privacy
+    )
+
+    if video_id:
         return jsonify({
-            "success": False,
-            "error": f"Erro no teste: {str(e)}"
-        }), 500
+            "success": True,
+            "video_id": video_id,
+            "url": url,
+            "logs": auth_logs + upload_logs
+        })
+    return jsonify({
+        "success": False,
+        "error": "Falha no upload",
+        "logs": auth_logs + upload_logs
+    }), 400
 
 
 # ═══════════════════════════════════════════════
@@ -592,6 +1325,109 @@ def api_update_posted(video_id):
     return jsonify({"error": "Vídeo não encontrado"}), 404
 
 
+@app.route("/api/posted/sync", methods=["POST"])
+def api_sync_posted_videos():
+    """Sincroniza dados dos vídeos publicados com o YouTube Studio (Content tab).
+    Busca views, likes, comments, privacidade, estado de processamento, etc."""
+    posted = db.get_posted_videos()
+    if not posted:
+        return jsonify({"ok": True, "synced": 0, "message": "Sem vídeos publicados"})
+
+    # Agrupa vídeos por canal para minimizar autenticações
+    by_channel = {}
+    for v in posted:
+        yt_vid_id = v.get("youtube_video_id", "")
+        ch_id = v.get("channel_id", "")
+        if yt_vid_id and ch_id:
+            if ch_id not in by_channel:
+                by_channel[ch_id] = []
+            by_channel[ch_id].append(v)
+
+    synced = 0
+    errors = []
+    channels = db.get_channels()
+    ch_map = {ch["id"]: ch for ch in channels}
+
+    for ch_id, videos in by_channel.items():
+        channel = ch_map.get(ch_id)
+        if not channel:
+            continue
+        creds_path = channel.get("credentials_path", "").strip()
+        if not creds_path or not os.path.exists(creds_path):
+            continue
+
+        try:
+            service, _ = _get_youtube_service(creds_path)
+            if not service:
+                continue
+        except Exception:
+            continue
+
+        # Buscar em blocos de 50 (limite da API)
+        video_ids = [v["youtube_video_id"] for v in videos]
+        for i in range(0, len(video_ids), 50):
+            batch_ids = video_ids[i:i+50]
+            try:
+                resp = service.videos().list(
+                    part="snippet,status,statistics,contentDetails",
+                    id=",".join(batch_ids)
+                ).execute()
+
+                yt_map = {}
+                for item in resp.get("items", []):
+                    yt_map[item["id"]] = item
+
+                for v in videos:
+                    vid_id = v["youtube_video_id"]
+                    if vid_id not in yt_map:
+                        continue
+
+                    yt = yt_map[vid_id]
+                    snippet = yt.get("snippet", {})
+                    status_info = yt.get("status", {})
+                    stats = yt.get("statistics", {})
+                    content = yt.get("contentDetails", {})
+
+                    thumbs = snippet.get("thumbnails", {})
+                    thumb_url = ""
+                    for sz in ("maxres", "high", "medium", "default"):
+                        if sz in thumbs:
+                            thumb_url = thumbs[sz].get("url", "")
+                            if thumb_url:
+                                break
+
+                    update_data = {
+                        "youtube_title": snippet.get("title", ""),
+                        "youtube_description": snippet.get("description", ""),
+                        "youtube_thumbnail": thumb_url,
+                        "youtube_privacy": status_info.get("privacyStatus", ""),
+                        "youtube_upload_status": status_info.get("uploadStatus", ""),
+                        "youtube_publish_at": status_info.get("publishAt", ""),
+                        "youtube_license": status_info.get("license", ""),
+                        "youtube_embeddable": status_info.get("embeddable", True),
+                        "youtube_made_for_kids": status_info.get("madeForKids", False),
+                        "youtube_views": int(stats.get("viewCount", 0)),
+                        "youtube_likes": int(stats.get("likeCount", 0)),
+                        "youtube_comments": int(stats.get("commentCount", 0)),
+                        "youtube_duration": content.get("duration", ""),
+                        "youtube_definition": content.get("definition", ""),
+                        "youtube_tags": snippet.get("tags", []),
+                        "youtube_category_id": snippet.get("categoryId", ""),
+                        "youtube_channel_title": snippet.get("channelTitle", ""),
+                        "youtube_published_at": snippet.get("publishedAt", ""),
+                        "views": int(stats.get("viewCount", 0)),
+                        "likes": int(stats.get("likeCount", 0)),
+                        "comments": int(stats.get("commentCount", 0)),
+                    }
+                    db.update_posted_video(v["id"], **update_data)
+                    synced += 1
+
+            except Exception as e:
+                errors.append(f"Erro ao sincronizar batch para canal {channel.get('name', ch_id)}: {e}")
+
+    return jsonify({"ok": True, "synced": synced, "errors": errors if errors else None})
+
+
 # ═══════════════════════════════════════════════
 #  API — CLIPS PARA REVISÃO
 # ═══════════════════════════════════════════════
@@ -625,11 +1461,272 @@ def api_update_review_clip(clip_id):
 
 @app.route("/api/review/<clip_id>/publish", methods=["POST"])
 def api_publish_review_clip(clip_id):
+    """Publica um clip de revisão — faz upload real para o YouTube com logs detalhados."""
     data = request.json or {}
-    result = db.publish_review_clip(clip_id, data.get("channel_id"))
-    if result:
-        return jsonify(result)
-    return jsonify({"error": "Não foi possível publicar (falta canal?)"}), 400
+    channel_id = data.get("channel_id")
+
+    # Busca o clip
+    clip = None
+    for c in db.get_review_clips():
+        if c["id"] == clip_id:
+            clip = c
+            break
+    if not clip:
+        return jsonify({"error": "Clip não encontrado"}), 404
+
+    # Determina canal
+    settings = db.get_settings()
+    publish_channel_id = channel_id or clip.get("channel_id") or settings.get("default_channel_id")
+
+    logs = []
+    logs.append("=== Publicação de Clip ===")
+    logs.append("")
+
+    youtube_meta = clip.get("youtube", {})
+    title = youtube_meta.get("titulo") or clip.get("title") or "Clip"
+    description = youtube_meta.get("descricao", "")
+    clip_path = clip.get("clip_path", "")
+
+    logs.append(f"[1/6] A preparar publicação...")
+    logs.append(f"OK — Título: {title}")
+    logs.append(f"OK — Ficheiro: {os.path.basename(clip_path)}")
+
+    # Verificar ficheiro existe
+    logs.append("")
+    logs.append("[2/6] A verificar ficheiro de vídeo...")
+    if not clip_path or not os.path.exists(clip_path):
+        logs.append(f"FALHOU: Ficheiro não encontrado: {clip_path}")
+        logs.append("→ O clip pode ter sido movido ou apagado")
+        # Marca como erro
+        db.update_review_clip(clip_id, status="error", error_detail="Ficheiro não encontrado")
+        return jsonify({"success": False, "logs": logs, "error": "Ficheiro não encontrado"})
+
+    file_size = os.path.getsize(clip_path)
+    logs.append(f"OK — Tamanho: {file_size / 1024 / 1024:.1f} MB")
+
+    # Verificar canal
+    logs.append("")
+    logs.append("[3/6] A verificar canal de destino...")
+    if not publish_channel_id:
+        logs.append("AVISO: Nenhum canal selecionado — a publicar apenas localmente")
+        logs.append("")
+        # Publicar localmente sem upload YouTube
+        result = db.publish_review_clip(clip_id, publish_channel_id)
+        if result:
+            logs.append("=== PUBLICADO LOCALMENTE ===")
+            logs.append("O clip foi publicado mas não foi enviado para o YouTube.")
+            logs.append("→ Seleciona um canal com OAuth configurado para fazer upload")
+            return jsonify({"success": True, "logs": logs, "local_only": True, "video": result.get("video")})
+        return jsonify({"success": False, "logs": logs, "error": "Erro ao publicar"})
+
+    channel = None
+    for ch in db.get_channels():
+        if ch["id"] == publish_channel_id:
+            channel = ch
+            break
+
+    if not channel:
+        logs.append(f"FALHOU: Canal não encontrado (ID: {publish_channel_id})")
+        return jsonify({"success": False, "logs": logs, "error": "Canal não encontrado"})
+
+    logs.append(f"OK — Canal: {channel.get('name', '?')}")
+
+    # Verificar credenciais
+    creds_path = channel.get("credentials_path", "").strip()
+    if not creds_path or not os.path.exists(creds_path):
+        logs.append("AVISO: Canal sem credenciais OAuth — a publicar apenas localmente")
+        result = db.publish_review_clip(clip_id, publish_channel_id)
+        if result:
+            logs.append("")
+            logs.append("=== PUBLICADO LOCALMENTE ===")
+            logs.append("→ Configura credenciais OAuth no canal para uploadar ao YouTube")
+            return jsonify({"success": True, "logs": logs, "local_only": True, "video": result.get("video")})
+        return jsonify({"success": False, "logs": logs, "error": "Erro ao publicar"})
+
+    logs.append(f"OK — Credenciais: {os.path.basename(creds_path)}")
+
+    # Marcar clip como "uploading"
+    db.update_review_clip(clip_id, status="uploading")
+
+    # Autenticação OAuth
+    logs.append("")
+    logs.append("[4/6] A autenticar com YouTube API...")
+    try:
+        service, auth_logs = _get_youtube_service(creds_path)
+        logs.extend(auth_logs)
+        if not service:
+            logs.append("FALHOU: Não foi possível autenticar")
+            db.update_review_clip(clip_id, status="pending")
+            return jsonify({"success": False, "logs": logs, "error": "Falha na autenticação"})
+        logs.append("OK — Autenticação concluída!")
+    except Exception as e:
+        logs.append(f"FALHOU: {e}")
+        db.update_review_clip(clip_id, status="pending")
+        return jsonify({"success": False, "logs": logs, "error": str(e)})
+
+    # Configurações de publicação do canal
+    privacy = channel.get("default_privacy", "private")
+    category = channel.get("default_category", "22")
+    default_tags = channel.get("default_tags", "")
+
+    # Descrição completa: template + descrição IA
+    if channel.get("default_video_description"):
+        template = channel["default_video_description"]
+        description = template.replace("{titulo}", title).replace("{canal_fonte}",
+            clip.get("source_channel_name", "")) + "\n\n" + description
+    
+    # Adiciona URLs do vídeo e canal originais (antes das hashtags)
+    video_url = clip.get("source_url") or ""
+    source_channel_name = clip.get("source_channel_name", "")
+
+    # Separa a descrição e as hashtags
+    desc_lines = (description or "").strip().split("\n")
+    desc_without_hashtags = []
+    desc_hashtags = []
+
+    for line in desc_lines:
+        clean_line = (line or "").strip()
+        if clean_line.startswith("#"):
+            desc_hashtags.append(clean_line)
+            continue
+
+        # Remove link cru duplicado do vídeo original (mantemos só a linha "🎬 Vídeo Original")
+        if video_url and video_url in clean_line:
+            continue
+
+        # Remove linhas já montadas em tentativas anteriores para evitar duplicação
+        if clean_line.startswith("🎬 Vídeo Original:") or clean_line.startswith("📺 Canal Original:"):
+            continue
+
+        desc_without_hashtags.append(line)
+
+    # Hashtags vindas de "Tags padrão" (separadas por vírgula)
+    default_tags_list = [t.strip() for t in (default_tags or "").split(",") if t.strip()]
+    default_tags_hashtags = []
+    for tag in default_tags_list:
+        raw = tag.lstrip("#").strip().replace(" ", "")
+        normalized = "".join(ch for ch in raw if ch.isalnum() or ch == "_")
+        if normalized:
+            default_tags_hashtags.append(f"#{normalized}")
+
+    # Reconstrói a descrição final: descrição + URLs + hashtags
+    final_desc = "\n".join(desc_without_hashtags).strip()
+
+    if video_url:
+        final_desc += f"\n\n🎬 Vídeo Original: {video_url}"
+
+    if source_channel_name:
+        channel_url = f"https://www.youtube.com/@{source_channel_name.replace(' ', '')}"
+        final_desc += f"\n📺 Canal Original: {channel_url}"
+
+    # Adiciona hashtags existentes + hashtags das tags padrão (sem duplicatas)
+    all_desc_hashtags = list(dict.fromkeys(desc_hashtags + default_tags_hashtags))
+    if all_desc_hashtags:
+        final_desc += "\n\n" + " ".join(all_desc_hashtags)
+
+    description = final_desc
+    
+    # Extrai hashtags para tags do YouTube (combine com default_tags)
+    import re as regex
+    hashtags_from_desc = regex.findall(r'#\w+', description or "")
+    tags = [t.strip() for t in (default_tags).split(",") if t.strip()]
+    tags = list(dict.fromkeys(tags + hashtags_from_desc))  # Remove duplicatas
+
+    logs.append("")
+    logs.append("[5/6] A fazer upload para o YouTube...")
+    logs.append(f"→ Privacidade: {privacy}")
+    logs.append(f"→ Categoria: {category}")
+    if tags:
+        logs.append(f"→ Tags: {', '.join(tags[:5])}")
+
+    try:
+        video_id, yt_url, upload_logs = _upload_video_to_youtube(
+            service, clip_path, title, description, tags,
+            category=category, privacy=privacy
+        )
+        logs.extend(upload_logs)
+    except Exception as e:
+        logs.append(f"FALHOU: Erro no upload: {e}")
+        db.update_review_clip(clip_id, status="pending")
+        return jsonify({"success": False, "logs": logs, "error": str(e)})
+
+    if not video_id:
+        logs.append("FALHOU: Upload não retornou video ID")
+        db.update_review_clip(clip_id, status="pending")
+        return jsonify({"success": False, "logs": logs, "error": "Upload falhou"})
+
+    # Verificar vídeo no YouTube
+    logs.append("")
+    logs.append("[6/6] A verificar vídeo no YouTube Studio...")
+    yt_video_info = {}
+    try:
+        resp = service.videos().list(
+            part="snippet,status,statistics,contentDetails",
+            id=video_id
+        ).execute()
+        items = resp.get("items", [])
+        if items:
+            v = items[0]
+            snippet = v.get("snippet", {})
+            status_info = v.get("status", {})
+            stats = v.get("statistics", {})
+            content = v.get("contentDetails", {})
+
+            yt_video_info = {
+                "youtube_video_id": video_id,
+                "youtube_url": yt_url,
+                "youtube_title": snippet.get("title", title),
+                "youtube_description": snippet.get("description", ""),
+                "youtube_thumbnail": snippet.get("thumbnails", {}).get("high", {}).get("url", "")
+                    or snippet.get("thumbnails", {}).get("medium", {}).get("url", "")
+                    or snippet.get("thumbnails", {}).get("default", {}).get("url", ""),
+                "youtube_privacy": status_info.get("privacyStatus", privacy),
+                "youtube_upload_status": status_info.get("uploadStatus", ""),
+                "youtube_publish_at": status_info.get("publishAt", ""),
+                "youtube_license": status_info.get("license", ""),
+                "youtube_embeddable": status_info.get("embeddable", True),
+                "youtube_made_for_kids": status_info.get("madeForKids", False),
+                "youtube_views": int(stats.get("viewCount", 0)),
+                "youtube_likes": int(stats.get("likeCount", 0)),
+                "youtube_comments": int(stats.get("commentCount", 0)),
+                "youtube_duration": content.get("duration", ""),
+                "youtube_definition": content.get("definition", ""),
+                "youtube_tags": snippet.get("tags", []),
+                "youtube_category_id": snippet.get("categoryId", ""),
+            }
+            logs.append(f"OK — Vídeo encontrado no YouTube!")
+            logs.append(f"OK — Estado: {status_info.get('uploadStatus', '?')}")
+            logs.append(f"OK — Privacidade: {status_info.get('privacyStatus', '?')}")
+            logs.append(f"OK — Definição: {content.get('definition', '?')}")
+        else:
+            logs.append("AVISO: Vídeo ainda não visível na API (pode levar alguns segundos)")
+    except Exception as e:
+        logs.append(f"AVISO: Não foi possível verificar: {e}")
+
+    # Publicar na BD com dados reais do YouTube
+    result = db.publish_review_clip(clip_id, publish_channel_id)
+    if result and result.get("video"):
+        # Atualizar o vídeo publicado com dados reais do YouTube
+        posted_id = result["video"]["id"]
+        update_data = {
+            "youtube_url": yt_url,
+            "youtube_video_id": video_id,
+            "status": "published",
+            **yt_video_info,
+        }
+        db.update_posted_video(posted_id, **update_data)
+
+    logs.append("")
+    logs.append("=== PUBLICAÇÃO CONCLUÍDA COM SUCESSO! ===")
+    logs.append(f"Vídeo disponível em: {yt_url}")
+
+    return jsonify({
+        "success": True,
+        "logs": logs,
+        "video_id": video_id,
+        "youtube_url": yt_url,
+        "video": result.get("video") if result else None,
+    })
 
 
 @app.route("/api/review/<clip_id>", methods=["DELETE"])
@@ -764,6 +1861,66 @@ def api_ollama_models():
         return jsonify({"ok": False, "models": [], "error": str(e)})
 
 
+@app.route("/api/video/fetch-info", methods=["POST"])
+def api_fetch_video_info():
+    """Faz fetch de informações do vídeo YouTube (título, canal, URL)."""
+    try:
+        import yt_dlp
+
+        data = request.json or {}
+        url = data.get("url", "").strip()
+        
+        if not url:
+            return jsonify({"error": "URL é obrigatória"}), 400
+        
+        logging.info(f"🔍 Fetchando info de: {url}")
+        
+        # Usar yt-dlp para extrair informações
+        ydl_opts = {
+            'quiet': False,
+            'no_warnings': False,
+            'skip_download': True,
+            'extract_flat': False,
+            'socket_timeout': 30,
+        }
+        
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            logging.error(f"❌ Erro ao extrair info: {str(e)[:200]}")
+            return jsonify({"error": f"Não consegui extrair informações: {str(e)[:100]}"}), 400
+        
+        # Extrair dados relevant
+        title = info.get('title', '')
+        video_url = info.get('webpage_url', url)
+        uploader = info.get('uploader', '')
+        uploader_url = info.get('uploader_url', '')
+        channel_id = info.get('channel_id', '')
+        
+        # Construir URL do canal se não tiver
+        if not uploader_url and channel_id:
+            uploader_url = f"https://www.youtube.com/channel/{channel_id}"
+        elif not uploader_url and uploader:
+            # Try to construct from uploader name
+            uploader_url = f"https://www.youtube.com/@{uploader.replace(' ', '')}"
+        
+        result = {
+            "ok": True,
+            "title": title,
+            "url": video_url,
+            "channel_name": uploader,
+            "channel_url": uploader_url,
+        }
+        
+        logging.info(f"✅ Info fetched: {title[:50]}")
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logging.error(f"❌ Erro ao fazer fetch de video info: {e}")
+        return jsonify({"error": f"Erro: {str(e)[:100]}"}), 500
+
+
 # ═══════════════════════════════════════════════
 #  SERVIR CLIPS EDITADOS
 # ═══════════════════════════════════════════════
@@ -774,12 +1931,285 @@ def serve_clip(filename):
 
 
 # ═══════════════════════════════════════════════
+#  AUTO MANAGER (Limpeza automática + Playlist)
+# ═══════════════════════════════════════════════
+
+@app.route("/api/auto-manager/test-playlist", methods=["POST"])
+def test_auto_manager_playlist():
+    """Testa se uma playlist é válida."""
+    try:
+        data = request.get_json(silent=True) or {}
+        playlist_url = str(data.get("playlist_url", "") or "").strip()
+        
+        if not playlist_url:
+            return jsonify({"ok": False, "error": "URL da playlist é obrigatória"}), 400
+        
+        import yt_dlp
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': True,
+            'playlistend': 1,
+            'socket_timeout': 15,
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(playlist_url, download=False)
+            
+            if not info:
+                return jsonify({"ok": False, "error": "Playlist não encontrada"}), 400
+            
+            if info.get('entries'):
+                count = len([e for e in info['entries'] if e])
+                return jsonify({"ok": True, "message": f"Playlist válida ({count} vídeos)"})
+            elif info.get('id'):
+                return jsonify({"ok": True, "message": "Playlist válida"})
+            else:
+                return jsonify({"ok": False, "error": "Playlist vazia"}), 400
+                
+    except Exception as e:
+        err_str = str(e).lower()
+        if "does not exist" in err_str or "not found" in err_str:
+            return jsonify({"ok": False, "error": "Playlist não existe"}), 400
+        if "invalid" in err_str:
+            return jsonify({"ok": False, "error": "URL inválida"}), 400
+        return jsonify({"ok": False, "error": str(e)[:100]}), 500
+
+
+@app.route("/api/auto-manager/config", methods=["GET"])
+def get_auto_manager_config():
+    """Retorna a configuração atual do AutoManager."""
+    config = db.get_settings().get("auto_manager", {})
+    return jsonify({
+        "enabled": config.get("enabled", False),
+        "playlist_url": config.get("playlist_url", ""),
+        "max_storage_mb": config.get("max_storage_mb", 5000),
+        "check_interval_minutes": config.get("check_interval_minutes", 15)
+    })
+
+
+@app.route("/api/auto-manager/config", methods=["POST"])
+def set_auto_manager_config():
+    """Configura o AutoManager."""
+    try:
+        data = request.get_json(silent=True) or {}
+
+        enabled_raw = data.get("enabled", False)
+        if isinstance(enabled_raw, str):
+            enabled = enabled_raw.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            enabled = bool(enabled_raw)
+
+        playlist_url = str(data.get("playlist_url", "") or "").strip()
+
+        try:
+            max_storage_mb = int(data.get("max_storage_mb", 5000) or 5000)
+        except (TypeError, ValueError):
+            max_storage_mb = 5000
+
+        try:
+            check_interval_minutes = int(data.get("check_interval_minutes", 15) or 15)
+        except (TypeError, ValueError):
+            check_interval_minutes = 15
+
+        if max_storage_mb < 1000:
+            max_storage_mb = 1000
+        if check_interval_minutes < 5:
+            check_interval_minutes = 5
+
+        if enabled and not playlist_url:
+            return jsonify({"ok": False, "error": "URL da playlist é obrigatória para ativar"}), 400
+
+        # Salvar nas definições
+        settings = db.get_settings()
+        settings["auto_manager"] = {
+            "enabled": enabled,
+            "playlist_url": playlist_url,
+            "max_storage_mb": max_storage_mb,
+            "check_interval_minutes": check_interval_minutes
+        }
+        db.save_settings(settings)
+
+        # Reconfigurar o auto_manager
+        if enabled and playlist_url:
+            try:
+                configure_auto_manager(playlist_url, max_storage_mb, check_interval_minutes)
+                logging.info(f"✅ AutoManager configurado: {playlist_url}")
+                return jsonify({"ok": True, "message": "AutoManager ativado"})
+            except Exception as e:
+                logging.exception("❌ Erro ao configurar AutoManager")
+                return jsonify({"ok": False, "error": str(e)}), 500
+
+        auto_manager.stop()
+        logging.info("🛑 AutoManager desativado")
+        return jsonify({"ok": True, "message": "AutoManager desativado"})
+
+    except Exception as e:
+        logging.exception("❌ Erro inesperado em set_auto_manager_config")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/auto-manager/status", methods=["GET"])
+def get_auto_manager_status():
+    """Retorna o status do AutoManager."""
+    config = db.get_settings().get("auto_manager", {})
+    return jsonify({
+        "running": auto_manager._running,
+        "enabled": config.get("enabled", False),
+        "playlist_url": config.get("playlist_url", "")
+    })
+
+
+# ═══════════════════════════════════════════════
+#  PROXY ROTATIVO
+# ═══════════════════════════════════════════════
+
+@app.route("/api/proxy/status", methods=["GET"])
+def get_proxy_status():
+    """Status das proxies rotativas."""
+    if not _HAS_PROXY:
+        return jsonify({"enabled": False, "total": 0})
+    status = proxy_rotator.get_proxy_status()
+    return jsonify({"enabled": True, **status})
+
+
+@app.route("/api/proxy/refresh", methods=["POST"])
+def refresh_proxies_api():
+    """Força refresh da lista de proxies."""
+    if not _HAS_PROXY:
+        return jsonify({"ok": False, "error": "Módulo de proxy não disponível"})
+    import threading
+    def _do_refresh():
+        try:
+            proxies = proxy_rotator.refresh_proxies(force=True)
+            logging.info(f"🌐 Proxies refrescadas: {len(proxies)} funcionais")
+        except Exception as e:
+            logging.error(f"❌ Erro ao refrescar proxies: {e}")
+    threading.Thread(target=_do_refresh, daemon=True).start()
+    return jsonify({"ok": True, "message": "Refresh iniciado em background"})
+
+
+# ═══════════════════════════════════════════════
 #  MAIN
 # ═══════════════════════════════════════════════
 
-if __name__ == "__main__":
+def _start_server():
+    """Inicia o servidor Flask com todos os serviços (worker, proxy, auto-manager)."""
     os.makedirs("data", exist_ok=True)
     os.makedirs("downloads/clips_editados", exist_ok=True)
+    os.makedirs("downloads/satisfying", exist_ok=True)
     _silenciar_logs_http()
+
+    # ── Worker ──
+    worker.start()
+    logging.info("⚙️  Worker iniciado")
+
+    # ── Proxies em background ──
+    if _HAS_PROXY:
+        import threading
+        def _init_proxies():
+            try:
+                proxies = proxy_rotator.refresh_proxies(force=True)
+                logging.info(f"🌐 {len(proxies)} proxies prontas")
+            except Exception as e:
+                logging.warning(f"⚠️ Erro ao iniciar proxies: {e}")
+        threading.Thread(target=_init_proxies, daemon=True).start()
+        logging.info("🌐 Proxy rotativo a iniciar em background...")
+
+    # ── AutoManager ──
+    settings = db.get_settings()
+    auto_config = settings.get("auto_manager", {})
+    if auto_config.get("enabled") and auto_config.get("playlist_url"):
+        try:
+            configure_auto_manager(
+                auto_config["playlist_url"],
+                auto_config.get("max_storage_mb", 5000),
+                auto_config.get("check_interval_minutes", 15)
+            )
+            logging.info("🤖 AutoManager iniciado automaticamente")
+        except Exception as e:
+            logging.error(f"❌ Erro ao iniciar AutoManager: {e}")
+
     print("\n🚀 ClipAI Interface em http://localhost:5000\n")
-    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
+    is_child = os.environ.get("CLIPAI_WATCHDOG") == "1"
+    if is_child:
+        print("🐕 Watchdog ativo — restart automático em caso de crash\n")
+    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+
+
+def _run_as_watchdog():
+    """
+    Lança app.py como subprocesso e reinicia-o se crashar.
+    Delay exponencial: 3s → 6s → 12s → ... max 120s.
+    Se correr >60s sem crash, reset do delay.
+    """
+    import subprocess as _sp
+    import time as _time
+
+    MAX_DELAY = 120
+    INIT_DELAY = 3
+    HEALTHY_UPTIME = 60
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    python = os.path.join(base_dir, "venv", "Scripts", "python.exe")
+    if not os.path.exists(python):
+        python = sys.executable
+
+    delay = INIT_DELAY
+    restarts = 0
+
+    print("=" * 60)
+    print("🐕 WATCHDOG ClipAI — auto-restart em caso de crash")
+    print(f"   Python: {python}")
+    print("=" * 60)
+
+    while True:
+        t0 = _time.time()
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["CLIPAI_WATCHDOG"] = "1"          # flag para o filho saber
+
+        proc = _sp.Popen(
+            [python, os.path.join(base_dir, "app.py")],
+            env=env,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+        )
+        try:
+            exit_code = proc.wait()
+        except KeyboardInterrupt:
+            print("\n🛑 Ctrl+C — a parar...")
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except _sp.TimeoutExpired:
+                proc.kill()
+            print("👋 ClipAI terminado.")
+            break
+
+        uptime = _time.time() - t0
+
+        if exit_code == 0:
+            print("✅ Servidor terminou normalmente.")
+            break
+
+        restarts += 1
+        print(f"\n💥 Servidor crashou! (exit {exit_code}, uptime {uptime:.0f}s, restart #{restarts})")
+
+        if uptime > HEALTHY_UPTIME:
+            delay = INIT_DELAY
+        else:
+            delay = min(delay * 2, MAX_DELAY)
+
+        print(f"🔄 A reiniciar em {delay}s...\n")
+        _time.sleep(delay)
+
+
+if __name__ == "__main__":
+    if os.environ.get("CLIPAI_WATCHDOG") == "1":
+        # Somos o processo filho — arrancar o servidor normalmente
+        _start_server()
+    else:
+        # Somos o processo principal — arrancar como watchdog
+        _run_as_watchdog()
+

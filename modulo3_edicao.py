@@ -1829,7 +1829,7 @@ def aplicar_loop_infinito(caminho_entrada, caminho_saida, duracao_clip, xfade_du
 #  PIPELINE PRINCIPAL
 # ════════════════════════════════════════════════════════════
 
-def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloads/clips_editados"):
+def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloads/clips_editados", progress_callback=None):
     """
     Pipeline profissional de edição de clipes.
 
@@ -1837,6 +1837,9 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
       1. Corta o segmento (stream copy, rápido)
       2. Gera legendas ASS com hook + estilo profissional
       3. Aplica crop + todos os efeitos + legendas (encoding único)
+      
+    Args:
+        progress_callback (callable): Função callback(clip_idx, total_clips, pct, detail)
     """
     os.makedirs(pasta_saida, exist_ok=True)
 
@@ -1845,26 +1848,81 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
         duracao_total = 300  # Fallback: 5 minutos
 
     clipes_editados = []
+    total_clipes = len(clipes)
 
     for i, clipe in enumerate(clipes, 1):
         titulo = clipe.get('titulo') or clipe.get('title', f'Clipe {i}')
         print(f"\n{'='*55}")
-        print(f"📹 Editando clipe {i}/{len(clipes)}: {titulo}")
+        print(f"📹 Editando clipe {i}/{total_clipes}: {titulo}")
         print(f"{'='*55}")
+        
+        if progress_callback:
+            progress_callback(i, total_clipes, 0, "Iniciando edição")
 
-        # Distribui os clipes ao longo do vídeo, saltando os primeiros 2 min (intro)
-        INTRO_SKIP = 120          # segundos a ignorar no início
         duracao_clip = 50         # 50 segundos por clip
+        INTRO_SKIP = 120          # segundos a ignorar no início
         num_clipes = len(clipes)
 
-        zona_inicio = min(INTRO_SKIP, max(0, duracao_total - duracao_clip))
-        zona_disponivel = max(0, duracao_total - zona_inicio - duracao_clip)
-        espaco = zona_disponivel / max(1, num_clipes)
-        inicio = zona_inicio + espaco * (i - 1)
+        # ── Tentar localizar o momento exato via transcript (match Whisper) ──
+        inicio = None
+        transcript_text = (clipe.get('transcript') or "").strip()
+        if transcript_text and segmentos_whisper:
+            # Normalizar: minúsculas, sem pontuação extra
+            import re as _re
+            def _norm(t):
+                return _re.sub(r'[^\w\s]', '', t.lower()).strip()
+
+            needle = _norm(transcript_text)
+            if len(needle) >= 8:  # só procurar se tiver texto suficiente
+                best_score = 0.0
+                best_start = None
+
+                # Construir texto corrido com timestamps por segmento
+                for seg in segmentos_whisper:
+                    seg_text = _norm(seg.get("text", ""))
+                    if not seg_text:
+                        continue
+                    seg_start = seg.get("start", 0)
+                    # Ignorar primeiros 2 minutos (intro)
+                    if seg_start < INTRO_SKIP:
+                        continue
+                    # Match exato (substring)
+                    if needle[:40] in seg_text:
+                        best_start = seg_start
+                        best_score = 1.0
+                        break
+                    # Match parcial (primeiras N palavras)
+                    needle_words = needle.split()
+                    seg_words = seg_text.split()
+                    if len(needle_words) >= 3 and len(seg_words) >= 3:
+                        match_count = 0
+                        for nw in needle_words[:5]:
+                            if nw in seg_words:
+                                match_count += 1
+                        score = match_count / min(5, len(needle_words))
+                        if score > best_score and score >= 0.6:
+                            best_score = score
+                            best_start = seg_start
+
+                if best_start is not None:
+                    # Recuar 2s para dar contexto (mas não antes do INTRO_SKIP)
+                    inicio = max(INTRO_SKIP, best_start - 2.0)
+                    # Garantir que não ultrapassa o vídeo
+                    if inicio + duracao_clip > duracao_total:
+                        inicio = max(INTRO_SKIP, duracao_total - duracao_clip)
+                    print(f"  🎯 Transcript match! Início em {inicio:.1f}s (score={best_score:.0%})")
+
+        # Fallback: distribuir uniformemente se não encontrou transcript
+        if inicio is None:
+            zona_inicio = min(INTRO_SKIP, max(0, duracao_total - duracao_clip))
+            zona_disponivel = max(0, duracao_total - zona_inicio - duracao_clip)
+            espaco = zona_disponivel / max(1, num_clipes)
+            inicio = zona_inicio + espaco * (i - 1)
+            print(f"  📐 Distribuição uniforme: início em {inicio:.1f}s")
 
         # Garante que não ultrapassa a duração
         if inicio + duracao_clip > duracao_total:
-            inicio = max(zona_inicio, duracao_total - duracao_clip)
+            inicio = max(INTRO_SKIP if INTRO_SKIP < duracao_total else 0, duracao_total - duracao_clip)
             duracao_clip = min(duracao_clip, duracao_total - inicio)
 
         if duracao_clip <= 0:
@@ -1879,12 +1937,19 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
 
         # ═══ PASSO 1: CORTAR ═══
         print(f"  ✂️  Cortando ({inicio:.1f}s → {inicio + duracao_clip:.1f}s)...")
+        
+        if progress_callback:
+            progress_callback(i, total_clipes, 10, "Cortando vídeo")
+        
         if not cortar_video(caminho_video, inicio, duracao_clip, caminho_cortado):
             print(f"  ⚠️ Pulando clipe {i}")
             continue
 
         # ═══ PASSO 1.5: JUMP CUTS ═══
         # Calcula intervalos ANTES de gerar ASS para que os timestamps sejam remapeados
+        if progress_callback:
+            progress_callback(i, total_clipes, 20, "Jump cuts")
+        
         intervalos_jc = None
         duracao_clip_original = duracao_clip  # salva duração original (antes dos jump cuts)
         if segmentos_whisper:
@@ -1966,6 +2031,9 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
         print(f"     ✦ Denoise + Color grade + Sharpen 5x5")
         print(f"     ✦ Vinheta cinematográfica + Punch flash")
         print(f"     ✦ Progress bar neon + Legendas karaoke")
+        
+        if progress_callback:
+            progress_callback(i, total_clipes, 50, "Aplicando efeitos")
 
         sucesso = aplicar_edicao_profissional(
             caminho_cortado, caminho_ass, caminho_preloop, duracao_clip,
@@ -1979,6 +2047,10 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
 
         # ═══ PASSO 4: LOOP INFINITO SEAMLESS ═══
         print(f"     ✦ Loop infinito seamless (dissolve + audio crossfade exponencial)")
+        
+        if progress_callback:
+            progress_callback(i, total_clipes, 90, "Loop infinito")
+        
         sucesso_loop = aplicar_loop_infinito(caminho_preloop, caminho_final, duracao_clip)
         if not sucesso_loop:
             print(f"  ⚠️ Loop infinito falhou, usando versão sem loop")
@@ -2019,6 +2091,9 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
             tamanho_mb = os.path.getsize(caminho_final) / (1024 * 1024)
             print(f"  ✅ Clipe {i} concluído ({tamanho_mb:.1f}MB): {caminho_final}")
             print(f"     📌 YouTube: {metadados_yt['titulo']}")
+            
+            if progress_callback:
+                progress_callback(i, total_clipes, 100, "Concluído")
 
     return clipes_editados
 
