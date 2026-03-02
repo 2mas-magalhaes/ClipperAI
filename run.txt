@@ -6,3 +6,7 @@ PS E:\VScode\ClipAI> $env:PYTHONIOENCODING = "utf-8"; .\venv
 
 
 E:\VScode\ClipAI\venv\Scripts\python.exe app.py
+
+.\venv\Scripts\python.exe run_server.py
+
+python fetch_proxies.py
