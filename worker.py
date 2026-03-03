@@ -6,6 +6,7 @@ Corre em background thread e processa vídeos da queue sequencialmente.
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
+import copy
 import threading
 import time
 import traceback
@@ -151,14 +152,25 @@ class QueueWorker:
                     db.update_review_clip(clip_id, status="pending")
                     return False
             
-            # Preparar metadados
-            youtube_meta = review_clip.get("youtube", {})
+            # Preparar metadados — deep copy para isolar de outras referências
+            youtube_meta = copy.deepcopy(review_clip.get("youtube", {}))
             title = youtube_meta.get("titulo") or review_clip.get("title") or "Clip"
             description = youtube_meta.get("descricao", "")
+            
+            # Log detalhado para diagnóstico de off-by-one
+            logging.info(f"   📋 Upload metadata: file={os.path.basename(clip_path)}")
+            logging.info(f"   📋 titulo='{title[:60]}'")
+            logging.info(f"   📋 descricao='{(description or '')[:80]}'")
             
             # Configurações do canal
             privacy = channel.get("default_privacy", "private")
             category = channel.get("default_category", "22")
+            
+            # Aplicar template de descrição do canal (se existir)
+            if channel.get("default_video_description"):
+                template = channel["default_video_description"]
+                description = template.replace("{titulo}", title).replace("{canal_fonte}",
+                    review_clip.get("source_channel_name", "")) + "\n\n" + description
             
             # Adicionar URLs originais à descrição sem duplicar links
             video_url = review_clip.get("source_url") or ""
@@ -250,9 +262,8 @@ class QueueWorker:
                 db.update_review_clip(clip_id, status="pending")
                 return False
             
-            # Atualizar metadados do YouTube no clip
-            youtube_meta["url"] = url
-            youtube_meta["video_id"] = video_id
+            # Atualizar metadados do YouTube no clip via DB (sem mutar referências locais)
+            db.update_review_clip(clip_id, youtube_url=url, youtube_video_id=video_id)
             
             # Publicar na BD com os dados reais do YouTube
             result = db.publish_review_clip(clip_id, channel_id)
@@ -592,13 +603,22 @@ class QueueWorker:
                 review_source_channel_name = item.get("origin_channel_name") or item.get("source_channel_name", "")
                 review_source_channel_url = item.get("origin_channel_url", "")
 
+                # ── Deep copy youtube meta para isolar cada clip ──
+                # Previne que mutações (ex: youtube_meta["url"] = ...) de um clip
+                # vazem para o próximo via referência partilhada.
+                clip_youtube_meta = copy.deepcopy(c.get("youtube", {}))
+                clip_title = clip_youtube_meta.get("titulo") or c.get("titulo", "")
+                clip_path = c.get("arquivo", "")
+
+                logging.info(f"   📋 Clip {idx}: ficheiro={os.path.basename(clip_path)} titulo='{clip_title[:50]}'")
+
                 review_clip = db.add_review_clip(
                     queue_id=item_id,
-                    clip_path=c.get("arquivo", ""),
-                    title=c.get("youtube", {}).get("titulo") or c.get("titulo", ""),
+                    clip_path=clip_path,
+                    title=clip_title,
                     channel_id=target_channel_id,
                     reason=c.get("razao", ""),
-                    youtube_meta=c.get("youtube", {}),
+                    youtube_meta=clip_youtube_meta,
                     source_channel_name=review_source_channel_name,
                     source_url=review_source_url,
                 )
@@ -619,6 +639,7 @@ class QueueWorker:
                         del self._upload_blocked_channels[target_channel_id]
                     
                     logging.info(f"📤 [{idx}/{len(clipes_editados)}] A publicar: {review_clip['title'][:50]}...")
+                    logging.info(f"   📝 Descrição (100 chars): {clip_youtube_meta.get('descricao', '')[:100]}")
                     
                     try:
                         # Tentar fazer upload real ao YouTube
@@ -628,6 +649,11 @@ class QueueWorker:
                             logging.info(f"   ✅ Clip publicado com sucesso no YouTube!")
                         else:
                             logging.warning(f"   ⚠️ Upload falhou - clip movido para revisão manual")
+                        
+                        # Pausa entre uploads para evitar race conditions no YouTube API
+                        if idx < len(clipes_editados):
+                            logging.info(f"   ⏳ Aguardando 3s antes do próximo upload...")
+                            time.sleep(3)
                             
                     except Exception as e:
                         logging.error(f"   ❌ Erro ao publicar clip: {e}")

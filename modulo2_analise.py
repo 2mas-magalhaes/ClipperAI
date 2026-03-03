@@ -413,7 +413,7 @@ Devolve APENAS JSON:"""
             options={
                 "temperature": 0.2,
                 "top_p": 0.9,
-                "num_ctx": 4096  # Menor = menos VRAM do KV-cache = mais rápido na GTX 1070
+                "num_ctx": 12000  # Context window aumentado para 12000
             }
         )
         _t_llama_end = _t2.time()

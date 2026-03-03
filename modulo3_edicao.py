@@ -1091,6 +1091,13 @@ def gerar_metadados_youtube(titulo_clip, razao_clip, duracao_seg=50, idioma="pt-
       - Descrição: resumo + razão do clipe + hashtags virais de trending topics
       - Hashtags: #Shorts, #Viral, #FYP, + domínio específico
     """
+    # Validar e limpar titulo_clip - se estiver vazio ou ser padrão template, usar fallback
+    titulo_clip_clean = (titulo_clip or "").strip()
+    if not titulo_clip_clean or "clipe" in titulo_clip_clean.lower() or len(titulo_clip_clean) < 5:
+        # Se título é muito genérico, extrair do razao_clip (que vem do LLM)
+        razao_words = razao_clip.split(']', 1)[-1].strip() if ']' in razao_clip else razao_clip
+        titulo_clip_clean = razao_words[:40] if razao_words else "Momento Viral"
+    
     emoji_dict = {
         "polemic": "😤🔥",
         "relatable": "💯😂",
@@ -1121,14 +1128,15 @@ def gerar_metadados_youtube(titulo_clip, razao_clip, duracao_seg=50, idioma="pt-
         emoji_trigger = "🔥"
 
     # Título: Hook + Trigger + Duração + CTA + Hashtags
-    titulo = f"{titulo_clip} {emoji_trigger} | Momento {trigger_pt}"
+    titulo = f"{titulo_clip_clean} {emoji_trigger} | Momento {trigger_pt}"
     if len(titulo) > 60:
         titulo = titulo[:57] + "..."
 
     # Descrição com razão e hashtags virais
-    descricao = f"""{titulo_clip}
+    razao_cleaned = razao_clip.split(']', 1)[-1].strip() if ']' in razao_clip else razao_clip
+    descricao = f"""{titulo_clip_clean}
 
-{razao_clip}
+{razao_cleaned}
 
 ━━━━━━━━━━━━━━━━━━━━
 
@@ -1879,10 +1887,10 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
 
                 # Construir texto corrido com timestamps por segmento
                 for seg in segmentos_whisper:
-                    seg_text = _norm(seg.get("text", ""))
+                    seg_text = _norm(seg.get("texto", ""))
                     if not seg_text:
                         continue
-                    seg_start = seg.get("start", 0)
+                    seg_start = seg.get("inicio", 0)
                     # Ignorar primeiros 2 minutos (intro)
                     if seg_start < INTRO_SKIP:
                         continue
@@ -2068,9 +2076,21 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
         razao = clipe.get('razao', 'Clipe viral interessante')
         metadados_yt = gerar_metadados_youtube(titulo, razao, duracao_clip)
 
-        # Se o Ollama já trouxe copy YouTube (descricao), usa-o
-        youtube_titulo_final = (clipe.get('titulo') or metadados_yt["titulo"] or titulo).strip()
-        youtube_descricao_final = (clipe.get('descricao') or metadados_yt["descricao"] or "").strip()
+        # PRIORIDADE: Usar metadados gerados (mais confiáveis) em vez de valores da análise LLM que podem estar vazios
+        # Se o Ollama trouxe dados genuínos (não padrão), usa-os como override
+        llm_titulo = (clipe.get('titulo') or "").strip()
+        llm_descricao = (clipe.get('descricao') or "").strip()
+        
+        # Só usa LLM se tiver dados reais (não valores padrão/template)
+        if llm_titulo and "max 60 chars" not in llm_titulo.lower() and len(llm_titulo) < 80:
+            youtube_titulo_final = llm_titulo
+        else:
+            youtube_titulo_final = metadados_yt["titulo"].strip()
+            
+        if llm_descricao and "max 60 chars" not in llm_descricao and len(llm_descricao) > 20:
+            youtube_descricao_final = llm_descricao
+        else:
+            youtube_descricao_final = metadados_yt["descricao"].strip()
 
         clipe_dict = {
             "numero": i,

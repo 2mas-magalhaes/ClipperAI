@@ -1472,6 +1472,25 @@ textarea.form-control { resize: vertical; min-height: 60px; }
     color: var(--primary, var(--accent));
 }
 
+.btn-requeue {
+    font-size: 0.73rem;
+    padding: 4px 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.btn-requeue:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+}
+
 /* ═══════════════ OLLAMA STATUS ═══════════════ */
 .ollama-status {
     display: flex;

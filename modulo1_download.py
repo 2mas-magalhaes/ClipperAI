@@ -3,6 +3,8 @@ import os
 import subprocess
 import glob
 import logging
+import time as _time
+import requests as _requests
 
 try:
     from proxy_rotator import get_proxy, remove_bad_proxy, apply_proxy_to_opts, refresh_proxies
@@ -235,6 +237,203 @@ def _baixar_com_pytube(url_video, caminho_saida):
         return False
 
 
+# ═══════════════════════════════════════════════════════════
+#  FALLBACK: RapidAPI YouTube Downloader
+# ═══════════════════════════════════════════════════════════
+
+_RAPIDAPI_KEY = "553b0439a7msha08d0d54f29251ep190392jsnf631ab1e063a"
+_RAPIDAPI_HOST = "yt-video-audio-downloader-api.p.rapidapi.com"
+_RAPIDAPI_BASE = f"https://{_RAPIDAPI_HOST}"
+
+def _baixar_com_rapidapi(url_video, caminho_saida, quality=1080, progress_callback=None):
+    """
+    Fallback usando RapidAPI YouTube Downloader.
+    Fluxo: POST /download → poll /status → GET /file
+    
+    Returns:
+        bool: True se sucesso, False se falhar.
+    """
+    UA_BROWSER = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    
+    headers = {
+        "Content-Type": "application/json",
+        "x-rapidapi-key": _RAPIDAPI_KEY,
+        "x-rapidapi-host": _RAPIDAPI_HOST,
+        "User-Agent": UA_BROWSER,
+        "Accept": "application/json",
+    }
+    
+    download_headers = {
+        "x-rapidapi-key": _RAPIDAPI_KEY,
+        "x-rapidapi-host": _RAPIDAPI_HOST,
+        "User-Agent": UA_BROWSER,
+    }
+    
+    try:
+        print(f"  🌐 RapidAPI: A submeter download ({quality}p)...")
+        
+        # 1. Submeter download (sem /v1/ prefix)
+        resp = _requests.post(
+            f"{_RAPIDAPI_BASE}/download",
+            headers=headers,
+            json={"url": url_video, "format": "mp4", "quality": quality},
+            timeout=30,
+        )
+        
+        # Tratar rate limit
+        if resp.status_code == 429:
+            print(f"  ⚠️ RapidAPI: Rate limit atingido (429)")
+            return False
+        
+        # Tratar respostas não-JSON
+        try:
+            data = resp.json()
+        except ValueError:
+            print(f"  ⚠️ RapidAPI: Resposta não é JSON (HTTP {resp.status_code})")
+            print(f"     {resp.text[:200]}")
+            return False
+        
+        # Verificar se há erro explícito
+        if data.get("error") or data.get("success") is False:
+            err = data.get("error") or data.get("message") or "Erro na API"
+            print(f"  ⚠️ RapidAPI download falhou: {err}")
+            return False
+        
+        # Se download direto (cache hit)
+        if data.get("directDownload") and data.get("downloadUrl"):
+            print(f"  ⚡ RapidAPI: download direto (cache hit)")
+            return _rapidapi_download_file(
+                data["downloadUrl"], caminho_saida, download_headers, progress_callback
+            )
+        
+        job_id = data.get("jobId")
+        if not job_id:
+            print(f"  ⚠️ RapidAPI: sem jobId na resposta")
+            return False
+        
+        # Usar statusUrl se disponível, senão construir
+        status_url = data.get("statusUrl") or f"{_RAPIDAPI_BASE}/status/{job_id}"
+        print(f"  ⏳ RapidAPI: Job {job_id} — a aguardar processamento...")
+        
+        # 2. Polling do status
+        max_polls = 60  # 2 min max (2s * 60)
+        for poll_i in range(max_polls):
+            _time.sleep(2)
+            
+            try:
+                # Se statusUrl for externo (youtubedownloadapi.com), não usar headers RapidAPI
+                poll_headers = {"User-Agent": UA_BROWSER}
+                if _RAPIDAPI_HOST in status_url:
+                    poll_headers = headers
+                
+                status_resp = _requests.get(
+                    status_url,
+                    headers=poll_headers,
+                    timeout=15,
+                )
+                
+                # Debug primeira vez
+                if poll_i == 0:
+                    print(f"     [DEBUG] Status URL: {status_url}")
+                    print(f"     [DEBUG] Status HTTP: {status_resp.status_code}")
+                    print(f"     [DEBUG] Response: {status_resp.text[:300]}")
+                
+                status_data = status_resp.json()
+            except Exception as poll_err:
+                print(f"  ⚠️ RapidAPI poll erro: {poll_err}")
+                continue
+            
+            status = status_data.get("status", "unknown")
+            progress = status_data.get("progress", 0)
+            
+            # Log a cada 20%
+            if poll_i % 5 == 0 and poll_i > 0:
+                print(f"     ... {progress}% ({status})")
+            
+            if progress_callback and progress > 0:
+                try:
+                    progress_callback(min(progress, 95))  # Reserva 5% para o download final
+                except Exception:
+                    pass
+            
+            if status == "completed":
+                download_url = status_data.get("downloadUrl", "")
+                if not download_url:
+                    print(f"  ⚠️ RapidAPI: job concluído mas sem downloadUrl")
+                    return False
+                
+                print(f"  ✅ RapidAPI: Job concluído! A descarregar ficheiro...")
+                return _rapidapi_download_file(
+                    download_url, caminho_saida, download_headers, progress_callback
+                )
+            
+            elif status == "error":
+                err = status_data.get("error") or status_data.get("message") or "Erro no processamento"
+                print(f"  ⚠️ RapidAPI: Job falhou — {err}")
+                return False
+        
+        # Timeout
+        print(f"  ⚠️ RapidAPI: Timeout (>2min) a aguardar job {job_id}")
+        return False
+        
+    except _requests.exceptions.RequestException as e:
+        print(f"  ⚠️ RapidAPI: Erro de rede — {str(e)[:100]}")
+        return False
+    except Exception as e:
+        print(f"  ⚠️ RapidAPI: Erro inesperado — {str(e)[:100]}")
+        return False
+
+
+def _rapidapi_download_file(download_url, caminho_saida, headers, progress_callback=None):
+    """Descarrega o ficheiro final da RapidAPI para disco."""
+    try:
+        # Se URL relativa, prefixar com base
+        if download_url.startswith("/"):
+            download_url = f"https://{_RAPIDAPI_HOST}{download_url}"
+        
+        resp = _requests.get(download_url, headers=headers, stream=True, timeout=120)
+        resp.raise_for_status()
+        
+        total = int(resp.headers.get("content-length", 0))
+        downloaded = 0
+        
+        # Garantir que a pasta existe
+        os.makedirs(os.path.dirname(caminho_saida) or ".", exist_ok=True)
+        
+        with open(caminho_saida, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):  # 1MB chunks
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total > 0 and progress_callback:
+                        pct = int(downloaded / total * 100)
+                        try:
+                            progress_callback(pct)
+                        except Exception:
+                            pass
+        
+        # Validar ficheiro
+        valido, detalhe = _validar_video(caminho_saida)
+        if valido:
+            tamanho_mb = os.path.getsize(caminho_saida) / (1024 * 1024)
+            print(f"  ✅ RapidAPI: Download concluído! ({detalhe}, {tamanho_mb:.1f}MB)")
+            return True
+        else:
+            print(f"  ⚠️ RapidAPI: Ficheiro inválido — {detalhe}")
+            if os.path.exists(caminho_saida):
+                os.remove(caminho_saida)
+            return False
+            
+    except Exception as e:
+        print(f"  ⚠️ RapidAPI: Erro ao descarregar ficheiro — {str(e)[:100]}")
+        if os.path.exists(caminho_saida):
+            try:
+                os.remove(caminho_saida)
+            except Exception:
+                pass
+        return False
+
+
 def baixar_video_youtube(url_do_video, nome_arquivo="video_original", progress_callback=None):
     """
     Baixa um vídeo do YouTube ou copia um ficheiro local.
@@ -315,7 +514,7 @@ def baixar_video_youtube(url_do_video, nome_arquivo="video_original", progress_c
         'progress_hooks': [_make_progress_hook(progress_callback)],
         'retries': 5,                       # Retry em caso de erro de rede
         'fragment_retries': 5,
-        'file_access_retries': 3,
+        'file_access_retries': 10,          # Windows file lock fix: aumentado de 3 para 10
         'extractor_retries': 3,
         'age_limit': None,                  # Sem limite de idade
         'postprocessors': [{
@@ -324,6 +523,7 @@ def baixar_video_youtube(url_do_video, nome_arquivo="video_original", progress_c
         }],
         'socket_timeout': 30,
         'http_chunk_size': 10485760,         # 10MB chunks (mais estável)
+        'windowsfilenames': True,           # Windows-safe filenames
     }
 
     # Estratégias de fallback simplificadas (3 métodos essenciais):
@@ -461,6 +661,15 @@ def baixar_video_youtube(url_do_video, nome_arquivo="video_original", progress_c
                 # Outros erros (ex: bot detection) — também tentar próxima
                 continue
 
+    # ── Fallback: RapidAPI YouTube Downloader ──
+    print("  🌐 A tentar RapidAPI YouTube Downloader...")
+    # Tenta 1080p primeiro, depois 720p
+    for api_quality in (1080, 720):
+        if _baixar_com_rapidapi(url_do_video, caminho_completo, quality=api_quality, progress_callback=progress_callback):
+            if _HAS_PROXY:
+                refresh_proxies(force=True)
+            return caminho_completo
+
     # ── Fallback Final: Pytube (API completamente diferente) ──
     if _HAS_PYTUBE:
         if _baixar_com_pytube(url_do_video, caminho_completo):
@@ -566,8 +775,10 @@ def baixar_playlist_satisfatoria(url_playlist, n_videos=5, pasta_destino="downlo
             'progress_hooks': [_make_progress_hook()],
             'retries': 3,
             'fragment_retries': 3,
+            'file_access_retries': 10,      # Windows file lock fix
             'socket_timeout': 30,
             'http_chunk_size': 10485760,
+            'windowsfilenames': True,
             'postprocessors': [{
                 'key': 'FFmpegVideoRemuxer',
                 'preferedformat': 'mp4',

@@ -260,6 +260,8 @@ class AutoManager:
                             'socket_timeout': 30,
                             'retries': 3,
                             'fragment_retries': 3,
+                            'file_access_retries': 10,      # Windows file lock fix
+                            'windowsfilenames': True,
                         }
 
                         # Aplicar proxy rotativa (apenas 3 proxies fixas)

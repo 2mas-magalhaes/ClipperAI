@@ -1761,9 +1761,14 @@ function renderFollowedVideos(videos) {
                     ${ageText ? `<span class="tag">${ageText}</span>` : ''}
                     <span class="tag ${st.cls}"><i class="fas ${st.icon}"></i> ${st.txt}</span>
                 </div>
-                <a href="${esc(v.video_url || '#')}" target="_blank" class="source-video-link">
-                    <i class="fas fa-external-link-alt"></i> Ver no YouTube
-                </a>
+                <div style="display: flex; gap: 8px; margin-top: 8px;">
+                    <a href="${esc(v.video_url || '#')}" target="_blank" class="source-video-link">
+                        <i class="fas fa-external-link-alt"></i> Ver no YouTube
+                    </a>
+                    <button class="btn-requeue" onclick="requeueVideo('${esc(v.video_url || '')}', '${esc(v.title || 'Vídeo')}', event)" title="Adicionar à Queue">
+                        <i class="fas fa-plus"></i> Queue
+                    </button>
+                </div>
             </div>
         </div>`;
     }).join('');
@@ -1840,6 +1845,33 @@ async function scanAllFollowedChannels() {
     await fetchFollowedChannels();
     if (selectedFollowedId) {
         await fetchFollowedVideos(selectedFollowedId);
+    }
+}
+
+async function requeueVideo(videoUrl, videoTitle, event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    
+    if (!videoUrl) {
+        toast('URL do vídeo inválida', 'error');
+        return;
+    }
+
+    try {
+        await api('/api/queue', 'POST', {
+            url: videoUrl,
+            title: videoTitle
+        });
+        toast('Vídeo adicionado à queue', 'success');
+        await fetchQueue();
+        await fetchFollowedChannels();
+        if (selectedFollowedId) {
+            await fetchFollowedVideos(selectedFollowedId);
+        }
+    } catch (error) {
+        toast('Erro ao adicionar vídeo à queue', 'error');
     }
 }
 
