@@ -59,8 +59,14 @@ CACHE_BUST = str(int(time.time()))
 def _silenciar_logs_http():
     """Silencia logs de acesso HTTP do servidor de desenvolvimento Flask/Werkzeug."""
     werkzeug_log = logging.getLogger("werkzeug")
-    werkzeug_log.setLevel(logging.ERROR)
-    werkzeug_log.disabled = True
+
+    class _AccessLogFilter(logging.Filter):
+        """Filtra apenas logs de acesso HTTP, mantendo startup e erros visíveis."""
+        def filter(self, record):
+            msg = record.getMessage()
+            return not re.search(r'"(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) /', msg)
+
+    werkzeug_log.addFilter(_AccessLogFilter())
     app.logger.setLevel(logging.INFO)
 
 
