@@ -9,6 +9,8 @@ Uma solução **100% gratuita** e **open-source** para criar clips virais automa
 - ✅ **Download automático** de vídeos do YouTube
 - ✅ **Transcrição de áudio** com Whisper (offline)
 - ✅ **Análise inteligente** com Llama 2 (offline)
+- ✅ **Edição profissional** com efeitos avançados (zoom, color grading, legendas)
+- ✅ **🆕 Personagem AI (Clippy)** - Hooks virais automáticos no início dos vídeos
 - ✅ **Zero custos** - Tudo roda localmente
 - ✅ **Aceleração GPU** - 10x mais rápido com NVIDIA CUDA
 
@@ -64,11 +66,19 @@ O sistema é dividido em **5 módulos**:
 3. **Analisa** com Llama 2 (offline)
 4. **Identifica** os 3-5 melhores clipes
 
-### Módulo 3️⃣ - Edição (`modulo3_edicao.py`) - *Em desenvolvimento*
+### Módulo 3️⃣ - Edição (`modulo3_edicao.py`)
 - Corta vídeo nos momentos recomendados
-- Adiciona legendas animadas
+- **🆕 Adiciona personagem Clippy com hooks virais IA**
+- Adiciona legendas animadas karaoke (word-by-word)
 - Converte para formato vertical (9:16)
-- Aplica efeitos visuais
+- Aplica efeitos profissionais:
+  - Jump cuts automáticos (remove silêncios)
+  - Zoom dinâmico com face tracking
+  - Color grading cinematográfico
+  - Progress bar animada
+  - Loop infinito seamless
+
+📖 **Sobre o Clippy**: Veja [CLIPPY_README.md](CLIPPY_README.md) para detalhes
 
 ### Módulo 4️⃣ - Publicação (`modulo4_publicacao.py`) - *Em desenvolvimento*
 - Publica no YouTube Shorts

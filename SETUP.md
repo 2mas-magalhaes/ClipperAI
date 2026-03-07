@@ -16,6 +16,23 @@ Esta é a guia de instalação e configuração da Clipadora AI.
 
 ---
 
+## 🆕 NOVA FUNCIONALIDADE: Personagem Clippy com IA
+
+A **Clipadora AI** agora inclui uma personagem AI (clipe de papel com olhos) que:
+- 🎯 Aparece no início de cada vídeo com um hook viral
+- 🤖 Gera hooks automáticos usando IA (Ollama)
+- 🔊 Fala com voz natural (Microsoft Edge TTS)
+
+**Para usar esta funcionalidade, instale as dependências:**
+
+```bash
+pip install edge-tts Pillow
+```
+
+📖 **Documentação completa**: Veja [CLIPPY_README.md](CLIPPY_README.md)
+
+---
+
 ## ⚠️ O que AINDA precisa fazer:
 
 ### Passo 1: Instalar o Ollama (CRÍTICO)

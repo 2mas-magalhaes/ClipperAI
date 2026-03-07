@@ -33,6 +33,21 @@ import math
 import shutil
 import random
 
+# Importa módulo da personagem Clippy (AI que dá hooks no início)
+try:
+    from personagem_clippy import (
+        gerar_hook_com_ai,
+        criar_intro_clippy,
+        concatenar_intro_com_video,
+        gerar_intervencoes_satiricas,
+        inserir_intervencoes_clippy,
+        criar_personagem_clippy
+    )
+    CLIPPY_DISPONIVEL = True
+except ImportError:
+    CLIPPY_DISPONIVEL = False
+    print("⚠️ Módulo personagem_clippy não disponível. Intros do Clippy desativadas.")
+
 
 # ── Auto-download dos modelos DNN na primeira importação ──
 def _garantir_modelos_dnn():
@@ -1837,7 +1852,9 @@ def aplicar_loop_infinito(caminho_entrada, caminho_saida, duracao_clip, xfade_du
 #  PIPELINE PRINCIPAL
 # ════════════════════════════════════════════════════════════
 
-def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloads/clips_editados", progress_callback=None, unique_id=None):
+def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloads/clips_editados", 
+                  progress_callback=None, unique_id=None, adicionar_intro_clippy=True,
+                  adicionar_intervencoes_clippy=True):
     """
     Pipeline profissional de edição de clipes.
 
@@ -1845,10 +1862,15 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
       1. Corta o segmento (stream copy, rápido)
       2. Gera legendas ASS com hook + estilo profissional
       3. Aplica crop + todos os efeitos + legendas (encoding único)
+      4. [OPCIONAL] Adiciona intro da personagem Clippy (AI) com hook
+      5. [NOVO] Adiciona intervenções satíricas da Clippy durante o vídeo
+      6. Aplica loop infinito seamless
       
     Args:
         progress_callback (callable): Função callback(clip_idx, total_clips, pct, detail)
         unique_id (str): Identificador único para prefixar os nomes dos ficheiros (ex: queue_id)
+        adicionar_intro_clippy (bool): Se True, adiciona intro com personagem AI e hook (default: True)
+        adicionar_intervencoes_clippy (bool): Se True, Clippy intervém sarcasticamente durante o vídeo (default: True)
     """
     os.makedirs(pasta_saida, exist_ok=True)
     
@@ -2062,16 +2084,110 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
             print(f"  ⚠️ Edição falhou, usando vídeo base")
             shutil.copy2(caminho_cortado, caminho_preloop)
 
+        # ═══ PASSO 3.5: INTRO CLIPPY (PERSONAGEM AI COM HOOK) ═══
+        caminho_com_clippy = caminho_preloop  # Default: sem intro
+        
+        if adicionar_intro_clippy and CLIPPY_DISPONIVEL:
+            print(f"  🤖 Criando intro com personagem Clippy (AI)...")
+            
+            if progress_callback:
+                progress_callback(i, total_clipes, 75, "Gerando intro Clippy")
+            
+            # Gera hook com AI
+            transcricao_preview = ""
+            if segmentos_whisper:
+                # Pega as primeiras palavras da transcrição para contexto
+                for seg in segmentos_whisper:
+                    if seg.get("inicio", 0) >= inicio:
+                        transcricao_preview = seg.get("texto", "")[:150]
+                        break
+            
+            hook_gerado = gerar_hook_com_ai(titulo, razao, transcricao_preview)
+            print(f"     💬 Hook: '{hook_gerado}'")
+            
+            # Cria vídeo de intro
+            caminho_intro = f"{pasta_saida}/{prefix}clip_{i:02d}_intro.mp4"
+            intro_criada = criar_intro_clippy(
+                caminho_preloop,
+                hook_gerado,
+                caminho_intro,
+                duracao_intro=4.5,
+                fade_out_duracao=0.5
+            )
+            
+            if intro_criada:
+                # Concatena intro + vídeo principal
+                caminho_temp_concat = f"{pasta_saida}/{prefix}clip_{i:02d}_preloop_clippy.mp4"
+                if concatenar_intro_com_video(caminho_intro, caminho_preloop, caminho_temp_concat):
+                    caminho_com_clippy = caminho_temp_concat
+                    print(f"  ✅ Intro Clippy adicionada com sucesso!")
+                    # Limpa intro temporária
+                    try:
+                        os.remove(caminho_intro)
+                    except:
+                        pass
+                else:
+                    print(f"  ⚠️ Falha ao concatenar intro, usando vídeo sem Clippy")
+            else:
+                print(f"  ⚠️ Falha ao criar intro Clippy, usando vídeo sem intro")
+
+        # ═══ PASSO 3.8: INTERVENÇÕES SATÍRICAS DA CLIPPY ═══
+        caminho_com_intervencoes = caminho_com_clippy  # Default: sem intervenções
+        
+        if adicionar_intervencoes_clippy and CLIPPY_DISPONIVEL:
+            print(f"  🎭 Analisando momentos para intervenções satíricas da Clippy...")
+            
+            if progress_callback:
+                progress_callback(i, total_clipes, 80, "Intervenções Clippy")
+            
+            # Monta transcrição completa do clip
+            transcricao_completa = ""
+            for seg in segmentos_whisper:
+                seg_inicio = seg.get("inicio", 0)
+                seg_fim = seg.get("fim", 0)
+                if inicio <= seg_inicio <= inicio + duracao_clip:
+                    transcricao_completa += seg.get("texto", "") + " "
+            
+            # Só gera intervenções se tiver transcrição suficiente
+            if len(transcricao_completa.strip()) > 100:
+                intervencoes = gerar_intervencoes_satiricas(
+                    titulo, 
+                    transcricao_completa[:2000],  # Limita para não sobrecarregar LLM
+                    razao
+                )
+                
+                if intervencoes:
+                    print(f"     🎯 {len(intervencoes)} intervenções identificadas")
+                    for idx, interv in enumerate(intervencoes, 1):
+                        print(f"        {idx}. \"{interv.get('comentario', '')}\" ({interv.get('expressao', 'normal')})")
+                    
+                    # Insere as intervenções no vídeo
+                    caminho_temp_intervencoes = f"{pasta_saida}/{prefix}clip_{i:02d}_intervencoes.mp4"
+                    resultado_intervencoes = inserir_intervencoes_clippy(
+                        caminho_com_clippy,
+                        intervencoes,
+                        segmentos_whisper,
+                        caminho_temp_intervencoes,
+                        inicio_clip=inicio
+                    )
+                    
+                    if resultado_intervencoes != caminho_com_clippy:
+                        caminho_com_intervencoes = resultado_intervencoes
+                else:
+                    print(f"     ℹ️  Nenhuma intervenção sugerida (conteúdo não requer)")
+            else:
+                print(f"     ⚠️  Transcrição muito curta para intervenções")
+
         # ═══ PASSO 4: LOOP INFINITO SEAMLESS ═══
         print(f"     ✦ Loop infinito seamless (dissolve + audio crossfade exponencial)")
         
         if progress_callback:
             progress_callback(i, total_clipes, 90, "Loop infinito")
         
-        sucesso_loop = aplicar_loop_infinito(caminho_preloop, caminho_final, duracao_clip)
+        sucesso_loop = aplicar_loop_infinito(caminho_com_intervencoes, caminho_final, duracao_clip)
         if not sucesso_loop:
             print(f"  ⚠️ Loop infinito falhou, usando versão sem loop")
-            shutil.copy2(caminho_preloop, caminho_final)
+            shutil.copy2(caminho_com_intervencoes, caminho_final)
 
         # Limpa temporários
         for tmp in (caminho_cortado, caminho_preloop):
@@ -2080,6 +2196,20 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
                     os.remove(tmp)
                 except Exception:
                     pass
+        
+        # Limpa temporário do Clippy se existir
+        if caminho_com_clippy != caminho_preloop and os.path.exists(caminho_com_clippy):
+            try:
+                os.remove(caminho_com_clippy)
+            except:
+                pass
+        
+        # Limpa temporário das intervenções se existir
+        if caminho_com_intervencoes != caminho_com_clippy and os.path.exists(caminho_com_intervencoes):
+            try:
+                os.remove(caminho_com_intervencoes)
+            except:
+                pass
 
         # Gera metadados YouTube em Português
         razao = clipe.get('razao', 'Clipe viral interessante')
