@@ -1837,7 +1837,7 @@ def aplicar_loop_infinito(caminho_entrada, caminho_saida, duracao_clip, xfade_du
 #  PIPELINE PRINCIPAL
 # ════════════════════════════════════════════════════════════
 
-def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloads/clips_editados", progress_callback=None):
+def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloads/clips_editados", progress_callback=None, unique_id=None):
     """
     Pipeline profissional de edição de clipes.
 
@@ -1848,8 +1848,17 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
       
     Args:
         progress_callback (callable): Função callback(clip_idx, total_clips, pct, detail)
+        unique_id (str): Identificador único para prefixar os nomes dos ficheiros (ex: queue_id)
     """
     os.makedirs(pasta_saida, exist_ok=True)
+    
+    # Prefixo único para evitar conflitos entre múltiplos vídeos
+    if unique_id:
+        prefix = f"{unique_id}_"
+    else:
+        # Fallback: usar timestamp
+        import time
+        prefix = f"{int(time.time())}_"
 
     duracao_total = obter_duracao_video(caminho_video)
     if not duracao_total:
@@ -1937,11 +1946,11 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
             print(f"  ⚠️ Duração insuficiente para clipe {i}")
             continue
 
-        # Caminhos
-        caminho_cortado = f"{pasta_saida}/clip_{i:02d}_temp.mp4"
-        caminho_ass = f"{pasta_saida}/clip_{i:02d}_legendas.ass"
-        caminho_preloop = f"{pasta_saida}/clip_{i:02d}_preloop.mp4"
-        caminho_final = f"{pasta_saida}/clip_{i:02d}_final.mp4"
+        # Caminhos (com prefixo único para evitar conflitos)
+        caminho_cortado = f"{pasta_saida}/{prefix}clip_{i:02d}_temp.mp4"
+        caminho_ass = f"{pasta_saida}/{prefix}clip_{i:02d}_legendas.ass"
+        caminho_preloop = f"{pasta_saida}/{prefix}clip_{i:02d}_preloop.mp4"
+        caminho_final = f"{pasta_saida}/{prefix}clip_{i:02d}_final.mp4"
 
         # ═══ PASSO 1: CORTAR ═══
         print(f"  ✂️  Cortando ({inicio:.1f}s → {inicio + duracao_clip:.1f}s)...")

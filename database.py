@@ -33,7 +33,14 @@ def _default_db():
             "clip_duration_min": 30,
             "clip_duration_max": 60,
             "max_video_duration_min": 60,
+            "schedule_enabled": True,
+            "schedule_interval_hours": 2,
+            "schedule_max_per_batch": 5,
+            "schedule_videos_per_day": 12,
+            "schedule_start_time": "08:00",
+            "schedule_end_time": "22:00",
         },
+        "scheduled_uploads": {},  # {channel_id: [timestamp1, timestamp2, ...]}
     }
 
 
@@ -62,6 +69,11 @@ def _load():
                     db["settings"]["ollama_model"] = "llama3.1"
             except Exception:
                 pass
+            
+            # Garantir que scheduled_uploads existe
+            if "scheduled_uploads" not in db:
+                db["scheduled_uploads"] = {}
+            
             return db
     except Exception:
         return _default_db()
@@ -538,3 +550,501 @@ def update_settings(**kwargs):
         db["settings"].update(kwargs)
         _save(db)
         return db["settings"]
+
+
+# ═══════════════════════════════════════════════
+#  AGENDAMENTO DE UPLOADS
+# ═══════════════════════════════════════════════
+
+def get_next_scheduled_slot(channel_id):
+    """Calcula e RESERVA atomicamente o próximo slot disponível para agendamento neste canal.
+    IMPORTANTE: Esta função já registra o slot automaticamente (operação atômica).
+    
+    Returns:
+        datetime: Timestamp do próximo slot (mínimo: agora + 2 minutos), já registrado
+    """
+    with _lock:
+        db = _load()
+        settings = db.get("settings", {})
+
+        if not settings.get("schedule_enabled", True):
+            return None
+
+        # Garantir estrutura base
+        if "scheduled_uploads" not in db:
+            db["scheduled_uploads"] = {}
+        if channel_id not in db["scheduled_uploads"]:
+            db["scheduled_uploads"][channel_id] = []
+
+        from datetime import datetime, timedelta, timezone
+
+        def _parse_channel_slot_local(ts):
+            try:
+                return datetime.fromisoformat(ts)
+            except Exception:
+                return None
+
+        def _parse_publish_utc_to_local(ts):
+            if not ts:
+                return None
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00").replace(".000+00:00", "+00:00"))
+                if dt.tzinfo is not None:
+                    return dt.astimezone().replace(tzinfo=None)
+                return dt
+            except Exception:
+                try:
+                    dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.000Z").replace(tzinfo=timezone.utc)
+                    return dt.astimezone().replace(tzinfo=None)
+                except Exception:
+                    return None
+
+        def _build_candidate_slots(start_dt, interval_h, max_per_day, start_time, end_time, days_ahead=60):
+            # Constrói uma grelha estável de horários (x em x horas) por janela diária.
+            try:
+                start_h, start_m = map(int, str(start_time or "08:00").split(":"))
+                end_h, end_m = map(int, str(end_time or "22:00").split(":"))
+            except Exception:
+                start_h, start_m = 8, 0
+                end_h, end_m = 22, 0
+
+            interval_h = max(0.5, float(interval_h or 2))
+            max_per_day = max(1, int(max_per_day or 12))
+
+            out = []
+            day0 = start_dt.date()
+            for d in range(days_ahead):
+                day = day0 + timedelta(days=d)
+                slot = datetime(day.year, day.month, day.day, start_h, start_m, 0, 0)
+                produced = 0
+                while produced < max_per_day:
+                    if slot.hour > end_h or (slot.hour == end_h and slot.minute > end_m):
+                        break
+                    if slot >= start_dt:
+                        out.append(slot)
+                    produced += 1
+                    next_slot = slot + timedelta(hours=interval_h)
+                    if next_slot.date() != day:
+                        break
+                    slot = next_slot
+            return out
+
+        def _is_occupied(candidate, occupied_list, tolerance_seconds=90):
+            for occ in occupied_list:
+                if abs((candidate - occ).total_seconds()) <= tolerance_seconds:
+                    return True
+            return False
+
+        now = datetime.now()
+        min_slot = now + timedelta(minutes=2)
+
+        # Ocupados = slots reservados + vídeos já agendados no YouTube para este canal.
+        occupied = []
+        for ts in db.get("scheduled_uploads", {}).get(channel_id, []):
+            dt = _parse_channel_slot_local(ts)
+            if dt and dt > now:
+                occupied.append(dt)
+
+        for video in db.get("posted_videos", []):
+            if video.get("channel_id") != channel_id:
+                continue
+            dt = _parse_publish_utc_to_local(video.get("youtube_publish_at", ""))
+            if dt and dt > now:
+                occupied.append(dt)
+
+        interval_hours = settings.get("schedule_interval_hours", 2)
+        videos_per_day = settings.get("schedule_videos_per_day", 12)
+        start_time = settings.get("schedule_start_time", "08:00")
+        end_time = settings.get("schedule_end_time", "22:00")
+
+        candidates = _build_candidate_slots(
+            start_dt=min_slot,
+            interval_h=interval_hours,
+            max_per_day=videos_per_day,
+            start_time=start_time,
+            end_time=end_time,
+            days_ahead=120,
+        )
+
+        next_slot = None
+        for c in candidates:
+            if not _is_occupied(c, occupied):
+                next_slot = c
+                break
+
+        if next_slot is None:
+            # Fallback defensivo: se não houver candidatos, usa now + 2 min.
+            next_slot = min_slot
+
+        db["scheduled_uploads"][channel_id].append(next_slot.isoformat())
+
+        # Limpeza de lixo antigo
+        cutoff = now - timedelta(days=7)
+        cleaned = []
+        for ts in db["scheduled_uploads"][channel_id]:
+            dt = _parse_channel_slot_local(ts)
+            if dt and dt > cutoff:
+                cleaned.append(ts)
+        db["scheduled_uploads"][channel_id] = cleaned
+
+        _save(db)
+        return next_slot
+
+
+def reassign_scheduled_upload_channel(publish_at, from_channel_id, to_channel_id):
+    """Move um slot reservado de um canal para outro.
+
+    Usado quando o upload acaba por ser publicado num canal diferente do previsto
+    (ex.: rotação de credenciais)."""
+    with _lock:
+        if not publish_at or not from_channel_id or not to_channel_id or from_channel_id == to_channel_id:
+            return {"moved": False, "reason": "noop"}
+
+        db = _load()
+        from datetime import datetime
+
+        if "scheduled_uploads" not in db:
+            db["scheduled_uploads"] = {}
+        if from_channel_id not in db["scheduled_uploads"]:
+            db["scheduled_uploads"][from_channel_id] = []
+        if to_channel_id not in db["scheduled_uploads"]:
+            db["scheduled_uploads"][to_channel_id] = []
+
+        if isinstance(publish_at, datetime):
+            target_dt = publish_at
+        else:
+            try:
+                target_dt = datetime.fromisoformat(str(publish_at).replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
+            except Exception:
+                return {"moved": False, "reason": "invalid_publish_at"}
+
+        moved_out = False
+        remaining = []
+        for ts in db["scheduled_uploads"].get(from_channel_id, []):
+            try:
+                dt = datetime.fromisoformat(ts)
+            except Exception:
+                continue
+            if (not moved_out) and abs((dt - target_dt).total_seconds()) <= 120:
+                moved_out = True
+                continue
+            remaining.append(ts)
+        db["scheduled_uploads"][from_channel_id] = remaining
+
+        already_exists = False
+        for ts in db["scheduled_uploads"].get(to_channel_id, []):
+            try:
+                dt = datetime.fromisoformat(ts)
+                if abs((dt - target_dt).total_seconds()) <= 120:
+                    already_exists = True
+                    break
+            except Exception:
+                continue
+
+        if not already_exists:
+            db["scheduled_uploads"][to_channel_id].append(target_dt.isoformat())
+
+        _save(db)
+        return {"moved": moved_out, "added": (not already_exists), "from": from_channel_id, "to": to_channel_id}
+
+
+def register_scheduled_upload(channel_id, publish_at):
+    """[DEPRECATED] Regista um novo agendamento para este canal.
+    NOTA: Use get_next_scheduled_slot() que já faz o registro atomicamente."""
+    with _lock:
+        db = _load()
+        if "scheduled_uploads" not in db:
+            db["scheduled_uploads"] = {}
+        
+        if channel_id not in db["scheduled_uploads"]:
+            db["scheduled_uploads"][channel_id] = []
+        
+        # Adicionar timestamp
+        from datetime import datetime
+        if isinstance(publish_at, datetime):
+            publish_at = publish_at.isoformat()
+        
+        db["scheduled_uploads"][channel_id].append(publish_at)
+        
+        # Limpar agendamentos antigos (mais de 7 dias no passado)
+        now = datetime.now()
+        db["scheduled_uploads"][channel_id] = [
+            ts for ts in db["scheduled_uploads"][channel_id]
+            if datetime.fromisoformat(ts) > now
+        ]
+        
+        _save(db)
+        return publish_at
+
+
+def clear_old_scheduled_uploads():
+    """Remove agendamentos antigos (mais de 24h no passado)."""
+    with _lock:
+        db = _load()
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        cutoff = now - timedelta(hours=24)
+        
+        if "scheduled_uploads" not in db:
+            return
+        
+        for channel_id in db["scheduled_uploads"]:
+            db["scheduled_uploads"][channel_id] = [
+                ts for ts in db["scheduled_uploads"][channel_id]
+                if datetime.fromisoformat(ts) > cutoff
+            ]
+        
+        _save(db)
+
+
+def get_all_scheduled_videos():
+    """Retorna todos os vídeos agendados (posted com youtube_publish_at) + slots reservados.
+    
+    Returns:
+        dict com: scheduled_videos (list), scheduled_slots (dict channel_id -> [timestamps]),
+                  settings de agendamento
+    """
+    with _lock:
+        db = _load()
+        from datetime import datetime
+        
+        settings = db.get("settings", {})
+        
+        # Vídeos publicados que têm agendamento
+        posted = db.get("posted_videos", [])
+        scheduled_videos = []
+        for v in posted:
+            publish_at = v.get("youtube_publish_at", "")
+            if publish_at:
+                scheduled_videos.append(v)
+        
+        # Ordenar por data de agendamento
+        def sort_key(v):
+            try:
+                return datetime.fromisoformat(v.get("youtube_publish_at", "").replace("Z", "+00:00").replace(".000Z", ""))
+            except Exception:
+                try:
+                    return datetime.strptime(v.get("youtube_publish_at", ""), "%Y-%m-%dT%H:%M:%S.000Z")
+                except Exception:
+                    return datetime.min
+        scheduled_videos.sort(key=sort_key)
+        
+        # Slots reservados no sistema
+        slots = db.get("scheduled_uploads", {})
+        
+        return {
+            "scheduled_videos": scheduled_videos,
+            "scheduled_slots": slots,
+            "schedule_enabled": settings.get("schedule_enabled", True),
+            "schedule_interval_hours": settings.get("schedule_interval_hours", 2),
+            "schedule_max_per_batch": settings.get("schedule_max_per_batch", 5),
+            "schedule_videos_per_day": settings.get("schedule_videos_per_day", 12),
+            "schedule_start_time": settings.get("schedule_start_time", "08:00"),
+            "schedule_end_time": settings.get("schedule_end_time", "22:00"),
+        }
+
+
+def rearrange_scheduled_slots(channel_id=None, interval_hours=2, videos_per_day=12, start_time="08:00", end_time="22:00"):
+    """Reagenda todos os slots futuros segundo os novos parâmetros.
+    
+    Recalcula os horários de todos os slots e vídeos agendados futuros.
+    """
+    with _lock:
+        db = _load()
+        from datetime import datetime, timedelta, timezone
+        
+        now = datetime.now()
+        
+        if "scheduled_uploads" not in db:
+            db["scheduled_uploads"] = {}
+        
+        # Parse start/end times
+        try:
+            start_h, start_m = map(int, start_time.split(":"))
+            end_h, end_m = map(int, end_time.split(":"))
+        except Exception:
+            start_h, start_m = 8, 0
+            end_h, end_m = 22, 0
+        
+        # Determinar canais a processar
+        if channel_id:
+            channels_to_process = [channel_id]
+        else:
+            channels_to_process = list(db["scheduled_uploads"].keys())
+        
+        # Vídeos publicados com agendamento futuro
+        posted = db.get("posted_videos", [])
+        
+        for ch_id in channels_to_process:
+            if ch_id not in db["scheduled_uploads"]:
+                continue
+            
+            # Contar quantos slots futuros existem
+            future_slots = []
+            for ts_str in db["scheduled_uploads"][ch_id]:
+                try:
+                    dt = datetime.fromisoformat(ts_str)
+                    if dt > now:
+                        future_slots.append(ts_str)
+                except Exception:
+                    continue
+            
+            num_future = len(future_slots)
+            if num_future == 0:
+                continue
+            
+            # Recalcular novos slots
+            new_slots = []
+            current = now + timedelta(minutes=2)
+            
+            # Ajustar para a hora de início se antes
+            if current.hour < start_h or (current.hour == start_h and current.minute < start_m):
+                current = current.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+            elif current.hour > end_h or (current.hour == end_h and current.minute > end_m):
+                # Passar para o dia seguinte
+                current = (current + timedelta(days=1)).replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+            
+            day_count = 0
+            current_day = current.date()
+            
+            for i in range(num_future):
+                # Verificar se ultrapassou a hora de fim do dia
+                if current.hour > end_h or (current.hour == end_h and current.minute > end_m):
+                    current = (current + timedelta(days=1)).replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+                    current_day = current.date()
+                    day_count = 0
+                
+                # Verificar se mudou de dia (intervalo cruzou meia-noite)
+                if current.date() != current_day:
+                    current_day = current.date()
+                    day_count = 0
+                
+                # Verificar se atingiu o máximo por dia
+                if day_count >= videos_per_day:
+                    current = (current + timedelta(days=1)).replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+                    current_day = current.date()
+                    day_count = 0
+                
+                new_slots.append(current.isoformat())
+                day_count += 1
+                current = current + timedelta(hours=interval_hours)
+            
+            # Manter slots passados, substituir futuros
+            past_slots = [
+                ts for ts in db["scheduled_uploads"][ch_id]
+                if datetime.fromisoformat(ts) <= now
+            ]
+            db["scheduled_uploads"][ch_id] = past_slots + new_slots
+        
+        # Atualizar posted videos com agendamento futuro
+        for v in posted:
+            publish_at = v.get("youtube_publish_at", "")
+            if not publish_at:
+                continue
+            try:
+                pub_dt = datetime.fromisoformat(publish_at.replace("Z", "+00:00").replace(".000Z", ""))
+            except Exception:
+                try:
+                    pub_dt = datetime.strptime(publish_at, "%Y-%m-%dT%H:%M:%S.000Z")
+                except Exception:
+                    continue
+            
+            # Só reagendar vídeos com publish_at no futuro e do canal correto
+            if pub_dt.replace(tzinfo=None) > now:
+                if channel_id and v.get("channel_id") != channel_id:
+                    continue
+                v["_needs_rearrange"] = True
+        
+        # Rearranjar posted videos futuros
+        rescheduled_videos = []  # Lista de vídeos reagendados para atualizar no YouTube
+        future_posted = [v for v in posted if v.get("_needs_rearrange")]
+        if future_posted:
+            # Agrupar por canal
+            by_channel = {}
+            for v in future_posted:
+                ch = v.get("channel_id", "unknown")
+                if ch not in by_channel:
+                    by_channel[ch] = []
+                by_channel[ch].append(v)
+            
+            for ch, videos in by_channel.items():
+                current = now + timedelta(minutes=2)
+                if current.hour < start_h or (current.hour == start_h and current.minute < start_m):
+                    current = current.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+                elif current.hour > end_h or (current.hour == end_h and current.minute > end_m):
+                    current = (current + timedelta(days=1)).replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+                
+                day_count = 0
+                current_day = current.date()
+                
+                for v in videos:
+                    if current.hour > end_h or (current.hour == end_h and current.minute > end_m):
+                        current = (current + timedelta(days=1)).replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+                        current_day = current.date()
+                        day_count = 0
+                    if current.date() != current_day:
+                        current_day = current.date()
+                        day_count = 0
+                    if day_count >= videos_per_day:
+                        current = (current + timedelta(days=1)).replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+                        current_day = current.date()
+                        day_count = 0
+                    
+                    # Converter hora local para UTC para o YouTube
+                    local_dt = current.astimezone()  # attach local tz
+                    utc_dt = local_dt.astimezone(timezone.utc)
+                    new_publish_at = utc_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                    v["youtube_publish_at"] = new_publish_at
+                    day_count += 1
+                    current = current + timedelta(hours=interval_hours)
+                    
+                    # Guardar info para atualizar no YouTube
+                    yt_id = v.get("youtube_video_id")
+                    if yt_id:
+                        rescheduled_videos.append({
+                            "youtube_video_id": yt_id,
+                            "youtube_publish_at": new_publish_at,
+                            "channel_id": v.get("channel_id"),
+                        })
+                    
+                    del v["_needs_rearrange"]
+        
+        # Limpar flag de qualquer que não foi processado
+        for v in posted:
+            v.pop("_needs_rearrange", None)
+        
+        _save(db)
+        return rescheduled_videos
+
+
+def clear_all_scheduled_slots(channel_id=None):
+    """Limpa todos os agendamentos futuros."""
+    with _lock:
+        db = _load()
+        from datetime import datetime
+        now = datetime.now()
+        
+        if "scheduled_uploads" not in db:
+            db["scheduled_uploads"] = {}
+            _save(db)
+            return
+        
+        if channel_id:
+            if channel_id in db["scheduled_uploads"]:
+                db["scheduled_uploads"][channel_id] = [
+                    ts for ts in db["scheduled_uploads"][channel_id]
+                    if datetime.fromisoformat(ts) <= now
+                ]
+        else:
+            for ch_id in db["scheduled_uploads"]:
+                db["scheduled_uploads"][ch_id] = [
+                    ts for ts in db["scheduled_uploads"][ch_id]
+                    if datetime.fromisoformat(ts) <= now
+                ]
+        
+        _save(db)
+
+
+# ═══════════════════════════════════════════════
+#  CANAIS YOUTUBE
+# ═══════════════════════════════════════════════

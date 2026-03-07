@@ -13,6 +13,7 @@ import traceback
 from datetime import datetime
 
 import database as db
+import credentials_rotation
 
 
 class QueueWorker:
@@ -91,13 +92,63 @@ class QueueWorker:
             logging.error(f"   ❌ Canal não encontrado: {channel_id}")
             return False
         
-        # Verificar credenciais OAuth
-        creds_path = channel.get("credentials_path", "").strip()
-        if not creds_path or not os.path.exists(creds_path):
-            logging.warning(f"   ⚠️ Canal sem credenciais OAuth configuradas")
-            # Publica localmente sem upload
-            db.publish_review_clip(clip_id, channel_id)
+        # PRIORIDADE: Usar credenciais do canal específico primeiro
+        # Só recorre à rotação se as do canal falharem por quota
+        channel_creds = channel.get("credentials_path", "").strip()
+        
+        # Construir lista ordenada: 1º canal, 2º rotação
+        creds_queue = []
+        if channel_creds and os.path.exists(channel_creds):
+            creds_queue.append(channel_creds)
+            logging.info(f"   🔑 Usando credenciais do canal: {os.path.basename(channel_creds)}")
+        
+        # Adicionar credenciais da rotação (excluindo a do canal)
+        try:
+            rotation_list = getattr(credentials_rotation, "CREDENTIALS_LIST", []) or []
+            for rot_cred in rotation_list:
+                if rot_cred and os.path.exists(rot_cred) and os.path.abspath(rot_cred) != os.path.abspath(channel_creds or ""):
+                    creds_queue.append(rot_cred)
+        except Exception:
+            pass
+        
+        if not creds_queue:
+            logging.error(f"   ❌ Nenhum credentials disponível para canal {channel.get('name', channel_id)}")
             return False
+
+        # Tentar upload com cada credencial na ordem de prioridade
+        for cred_idx, creds_path in enumerate(creds_queue):
+            try:
+                logging.info(f"   🔑 Tentativa {cred_idx + 1}/{len(creds_queue)} com: {os.path.basename(creds_path)}")
+                success = self._do_upload(review_clip, channel, creds_path)
+                return success
+            except Exception as e:
+                err_str = str(e)
+                has_more = cred_idx < len(creds_queue) - 1
+                
+                # Quota excedida OU limite de uploads — tentar próxima credencial
+                if ('quotaExceeded' in err_str or 'quota' in err_str.lower()
+                        or 'uploadLimitExceeded' in err_str or 'exceeded the number of videos' in err_str):
+                    if has_more:
+                        logging.warning(f"⚠️ Limite/quota em {os.path.basename(creds_path)}! Tentando próxima credencial...")
+                        continue
+                    else:
+                        # Todas as credenciais esgotadas — bloquear canal por 6h
+                        cooldown_hours = 6
+                        blocked_until = datetime.now() + __import__('datetime').timedelta(hours=cooldown_hours)
+                        self._upload_blocked_channels[channel_id] = blocked_until
+                        logging.error(f"❌ Limite atingido em todas as credenciais! Canal bloqueado até {blocked_until.strftime('%H:%M')}")
+                        db.update_review_clip(clip_id, status="pending")
+                        return False
+                
+                # Outros erros — não tentar mais
+                raise
+    
+    def _do_upload(self, review_clip, channel, creds_path):
+        """Executa o upload real do vídeo para o YouTube."""
+        import logging
+        
+        clip_id = review_clip["id"]
+        clip_path = review_clip.get("clip_path", "")
         
         # Marcar como uploading
         db.update_review_clip(clip_id, status="uploading")
@@ -166,6 +217,19 @@ class QueueWorker:
             privacy = channel.get("default_privacy", "private")
             category = channel.get("default_category", "22")
             
+            # AGENDAMENTO AUTOMÁTICO
+            # Se agendamento está ativo, calcula próximo slot e faz upload como "private" com publishAt
+            settings = db.get_settings()
+            schedule_enabled = settings.get("schedule_enabled", True)
+            publish_at = None
+            
+            if schedule_enabled:
+                from datetime import datetime
+                publish_at = db.get_next_scheduled_slot(channel.get("id"))
+                if publish_at:
+                    privacy = "private"  # Sempre privado com agendamento
+                    logging.info(f"   📅 Agendado para: {publish_at.strftime('%Y-%m-%d %H:%M')}")
+            
             # Aplicar template de descrição do canal (se existir)
             if channel.get("default_video_description"):
                 template = channel["default_video_description"]
@@ -222,11 +286,12 @@ class QueueWorker:
             # Upload do vídeo
             if app_module:
                 video_id, url, upload_logs = app_module._upload_video_to_youtube(
-                    service, clip_path, title, description, tags, category, privacy
+                    service, clip_path, title, description, tags, category, privacy, publish_at=publish_at
                 )
             else:
                 # Upload simplificado inline
                 from googleapiclient.http import MediaFileUpload
+                from datetime import datetime
                 
                 body = {
                     "snippet": {
@@ -241,18 +306,48 @@ class QueueWorker:
                     },
                 }
                 
+                # Adicionar agendamento se fornecido
+                if publish_at:
+                    from datetime import timezone as _tz
+                    if isinstance(publish_at, datetime):
+                        # Converter hora local para UTC antes de enviar ao YouTube
+                        if publish_at.tzinfo is None:
+                            local_dt = publish_at.astimezone()
+                            utc_dt = local_dt.astimezone(_tz.utc)
+                        else:
+                            utc_dt = publish_at.astimezone(_tz.utc)
+                        publish_at_str = utc_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                    else:
+                        publish_at_str = publish_at
+                    body["status"]["publishAt"] = publish_at_str
+                    logging.info(f"   📅 PublishAt definido: {publish_at_str}")
+                
                 media = MediaFileUpload(clip_path, chunksize=1024 * 1024, resumable=True)
                 req = service.videos().insert(part="snippet,status", body=body, media_body=media)
                 
                 response = None
                 last_logged_pct = 0
+                chunk_retry_count = 0
+                max_chunk_retries = 3
+                
                 while response is None:
-                    status_obj, response = req.next_chunk()
-                    if status_obj:
-                        pct = int(status_obj.progress() * 100)
-                        if pct >= last_logged_pct + 20:
-                            logging.info(f"   📤 Upload: {pct}%")
-                            last_logged_pct = pct
+                    try:
+                        status_obj, response = req.next_chunk()
+                        chunk_retry_count = 0  # Reset on success
+                        if status_obj:
+                            pct = int(status_obj.progress() * 100)
+                            if pct >= last_logged_pct + 20:
+                                logging.info(f"   📤 Upload: {pct}%")
+                                last_logged_pct = pct
+                    except (TimeoutError, ConnectionError, OSError) as e:
+                        if chunk_retry_count < max_chunk_retries:
+                            chunk_retry_count += 1
+                            wait_time = 2 ** chunk_retry_count
+                            logging.warning(f"   ⚠️ Timeout/conexão (tentativa {chunk_retry_count}/{max_chunk_retries})")
+                            time.sleep(wait_time)
+                            continue
+                        else:
+                            raise
                 
                 video_id = response.get("id", "")
                 url = f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
@@ -261,36 +356,89 @@ class QueueWorker:
                 logging.error(f"   ❌ Upload falhou - sem video_id")
                 db.update_review_clip(clip_id, status="pending")
                 return False
+
+            # Ler estado real do vídeo no YouTube para descobrir o canal final do upload.
+            yt_channel_id = ""
+            yt_channel_title = ""
+            yt_publish_at = ""
+            yt_privacy = ""
+            try:
+                verify = service.videos().list(part="snippet,status", id=video_id).execute()
+                items = verify.get("items", [])
+                if items:
+                    snippet = items[0].get("snippet", {})
+                    status = items[0].get("status", {})
+                    yt_channel_id = snippet.get("channelId", "")
+                    yt_channel_title = snippet.get("channelTitle", "")
+                    yt_publish_at = status.get("publishAt", "")
+                    yt_privacy = status.get("privacyStatus", "")
+            except Exception as e:
+                logging.warning(f"   ⚠️ Não foi possível verificar metadados finais no YouTube: {e}")
+
+            resolved_channel_id = channel.get("id")
+            resolve_reason = "fallback"
+            if app_module and hasattr(app_module, "_resolve_local_channel_for_uploaded_video"):
+                try:
+                    resolved_channel_id, resolve_reason = app_module._resolve_local_channel_for_uploaded_video(
+                        expected_channel_id=channel.get("id"),
+                        youtube_channel_id=yt_channel_id,
+                        youtube_channel_title=yt_channel_title,
+                    )
+                except Exception:
+                    resolved_channel_id = channel.get("id")
+                    resolve_reason = "fallback"
+
+            if resolved_channel_id != channel.get("id"):
+                logging.warning(
+                    f"   ⚠️ Canal real difere do canal previsto: {channel.get('id')} -> {resolved_channel_id} ({resolve_reason})"
+                )
+                if publish_at:
+                    try:
+                        db.reassign_scheduled_upload_channel(publish_at, channel.get("id"), resolved_channel_id)
+                    except Exception as e:
+                        logging.warning(f"   ⚠️ Falha ao mover slot reservado entre canais: {e}")
             
             # Atualizar metadados do YouTube no clip via DB (sem mutar referências locais)
             db.update_review_clip(clip_id, youtube_url=url, youtube_video_id=video_id)
             
             # Publicar na BD com os dados reais do YouTube
-            result = db.publish_review_clip(clip_id, channel_id)
+            result = db.publish_review_clip(clip_id, resolved_channel_id)
             
             if result and result.get("video"):
                 # Atualizar o vídeo publicado com a URL real
-                db.update_posted_video(result["video"]["id"], youtube_url=url)
+                update_data = {
+                    "youtube_url": url,
+                    "channel_id": resolved_channel_id,
+                }
+                if yt_channel_id:
+                    update_data["youtube_channel_id"] = yt_channel_id
+                if yt_channel_title:
+                    update_data["youtube_channel_title"] = yt_channel_title
+                if yt_publish_at:
+                    update_data["youtube_publish_at"] = yt_publish_at
+                if yt_privacy:
+                    update_data["youtube_privacy"] = yt_privacy
+                db.update_posted_video(result["video"]["id"], **update_data)
+
+            if resolved_channel_id:
+                db.update_review_clip(clip_id, channel_id=resolved_channel_id)
             
             return True
             
         except Exception as e:
             err_str = str(e)
-            # Detectar limite de uploads do YouTube
+            # Detectar limite de uploads do YouTube — relançar para _auto_publish_clip tentar próxima credencial
             if 'uploadLimitExceeded' in err_str or 'exceeded the number of videos' in err_str:
                 import logging as _log
-                cooldown_hours = 6
-                blocked_until = datetime.now() + __import__('datetime').timedelta(hours=cooldown_hours)
-                self._upload_blocked_channels[channel_id] = blocked_until
-                _log.warning(f"🚫 Limite de uploads do YouTube atingido no canal {channel_id}! Uploads pausados até {blocked_until.strftime('%H:%M')}")
+                _log.warning(f"🚫 Limite de uploads do YouTube nesta credencial: {os.path.basename(creds_path)}")
                 db.update_review_clip(clip_id, status="pending")
-                return False
+                raise  # Re-raise para _auto_publish_clip tentar próxima credencial
             
             logging.error(f"   ❌ Erro no upload automático: {e}")
             import traceback
             logging.error(traceback.format_exc())
             db.update_review_clip(clip_id, status="pending")
-            return False
+            raise  # Re-raise para a função pai tratar
 
     def _loop(self):
         while self._running:
@@ -494,10 +642,10 @@ class QueueWorker:
                 pass
 
             # Liberta VRAM do Whisper antes de chamar o Ollama
-            # Sem isto, Whisper fica com ~2GB na GPU e o Llama offloads para CPU (10x lento)
+            # Em Windows usamos modo seguro para evitar crash nativo do backend CUDA.
             try:
                 from modulo2_analise import liberar_gpu_whisper
-                liberar_gpu_whisper()
+                liberar_gpu_whisper(aggressive=False)
             except Exception:
                 pass
 
@@ -568,7 +716,9 @@ class QueueWorker:
                 if pct in [0, 50, 100]:
                     logging.info(f"   ✂️  Clip {clip_idx}/{total_clips}: {pct}% {detail}")
             
-            clipes_editados = editar_clipes(caminho_video, clipes, segmentos_whisper, progress_callback=edit_progress_callback)
+            clipes_editados = editar_clipes(caminho_video, clipes, segmentos_whisper, 
+                                           progress_callback=edit_progress_callback,
+                                           unique_id=item_id)
 
             if not clipes_editados:
                 db.update_queue_item(item_id, status="error", error_msg="Nenhum clipe editado",
@@ -578,6 +728,16 @@ class QueueWorker:
                 return
 
             salvar_lista_clips(clipes_editados)
+
+            # Re-ler o item da BD para capturar alterações feitas durante o processamento
+            # (ex: utilizador atribuiu canal via "Intercalar Canais" enquanto o vídeo processava)
+            fresh_item = None
+            for q in db.get_queue():
+                if q["id"] == item_id:
+                    fresh_item = q
+                    break
+            if fresh_item:
+                item = fresh_item
 
             settings = db.get_settings()
             # Por item: auto_publish override; se None usa o global

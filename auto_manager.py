@@ -10,12 +10,23 @@ import threading
 import logging
 from datetime import datetime, timedelta
 import yt_dlp
+import io
+import sys
 
 import database as db
 
 # Ficheiro para rastrear vídeos já descarregados pelo AutoManager
 _DOWNLOADED_TRACKER = os.path.join("data", "auto_downloaded.json")
 _AUTO_DOWNLOADS_DIR = os.path.join("downloads", "auto")
+_FAILED_VIDEOS_TRACKER = os.path.join("data", "auto_failed_videos.json")
+
+# Logger do yt-dlp - vai suprimir mensagens repetidas
+_YDL_LOGGER = logging.getLogger('yt_dlp')
+_YDL_LOGGER.setLevel(logging.CRITICAL)  # Apenas erros críticos, nada mais
+
+# Desabilitar a propagação de logs verbose do yt-dlp
+logging.getLogger('yt_dlp.utils').setLevel(logging.CRITICAL)
+logging.getLogger('yt_dlp.extractor.youtube').setLevel(logging.CRITICAL)
 
 
 def _load_downloaded_ids():
@@ -37,6 +48,89 @@ def _save_downloaded_ids(ids_set):
             json.dump(list(ids_set), f)
     except Exception as e:
         logging.error(f"❌ Erro ao salvar tracker: {e}")
+
+
+def _load_failed_videos():
+    """Carrega dict de vídeos que falharam (com razão do erro)."""
+    try:
+        if os.path.exists(_FAILED_VIDEOS_TRACKER):
+            with open(_FAILED_VIDEOS_TRACKER, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_failed_videos(failed_dict):
+    """Salva dict de vídeos que falharam."""
+    try:
+        os.makedirs(os.path.dirname(_FAILED_VIDEOS_TRACKER), exist_ok=True)
+        with open(_FAILED_VIDEOS_TRACKER, "w", encoding="utf-8") as f:
+            json.dump(failed_dict, f)
+    except Exception as e:
+        logging.debug(f"Erro ao salvar failed_videos: {e}")
+
+
+class _SilentYDLLogger:
+    """Logger customizado para yt-dlp que suprime erros de bot-detection repetidos."""
+    
+    def __init__(self, suppress_keywords=None):
+        self.suppress_keywords = suppress_keywords or [
+            'Sign in to confirm',
+            'bot',
+            'cookies',
+            'authentication',
+            'age-gated'
+        ]
+        self.error_cache = {}  # {video_id: count}
+        self.MAX_SAME_ERROR = 2  # Máximo de vezes que imprime o mesmo erro
+    
+    def debug(self, msg):
+        pass  # Ignorar debug messages
+    
+    def info(self, msg):
+        pass  # Ignorar info messages
+    
+    def warning(self, msg):
+        pass  # Ignorar warning messages
+    
+    def error(self, msg):
+        """Suprime erros de bot-detection repetidos."""
+        # Verificar se é um dos erros que devemos suprimir
+        should_suppress = any(kw.lower() in msg.lower() for kw in self.suppress_keywords)
+        
+        if should_suppress:
+            # Extrair video ID do erro se possível
+            vid_id = None
+            if '[youtube]' in msg:
+                parts = msg.split('[youtube]')
+                if len(parts) > 1:
+                    vid_info = parts[1].strip().split(':')[0]
+                    vid_id = vid_info.strip()
+            
+            # Contar quantas vezes vimos este erro
+            cache_key = vid_id or 'generic'
+            count = self.error_cache.get(cache_key, 0)
+            
+            # Só imprimir na primeira ou segunda ocorrência
+            if count < self.MAX_SAME_ERROR:
+                # Versão simplificada do erro
+                if vid_id:
+                    logging.debug(f"⚠️ Vídeo {vid_id}: {msg.split(':')[1] if ':' in msg else 'erro de autenticação - skipando'}")
+                self.error_cache[cache_key] = count + 1
+            # Senão, silenciar completamente
+        else:
+            # Erros importantes não relacionados a bot-detection - imprimir
+            logging.warning(f"[yt-dlp] {msg}")
+
+
+class _NullWriter(io.StringIO):
+    """Writer que descarta output (para suprimir stderr do yt-dlp)."""
+    def write(self, s):
+        return len(s)
+    
+    def flush(self):
+        pass
 
 
 class AutoManager:
@@ -177,8 +271,9 @@ class AutoManager:
             # Criar pasta de downloads automáticos
             os.makedirs(_AUTO_DOWNLOADS_DIR, exist_ok=True)
 
-            # Carregar IDs já descarregados
+            # Carregar IDs já descarregados e falhados
             downloaded_ids = _load_downloaded_ids()
+            failed_videos = _load_failed_videos()
 
             # Verificar espaço disponível
             total_size_mb = self._get_folder_size_mb("downloads")
@@ -195,6 +290,7 @@ class AutoManager:
                 'extract_flat': True,
                 'playlistend': 20,
                 'socket_timeout': 20,
+                'logger': _SilentYDLLogger(),  # Logger customizado
             }
 
             with yt_dlp.YoutubeDL(ydl_opts_list) as ydl:
@@ -210,11 +306,18 @@ class AutoManager:
                     logging.warning(f"⚠️ Nenhum vídeo encontrado na playlist")
                     return
 
-                # Filtrar vídeos que ainda não foram descarregados
+                # Filtrar vídeos que ainda não foram descarregados E não falharam por bot-detection
                 new_entries = []
                 for entry in entries:
                     vid_id = entry.get('id', '')
                     if vid_id and vid_id not in downloaded_ids:
+                        # ✅ NOVO: Skippar vídeos que falharam por bot-detection
+                        if vid_id in failed_videos:
+                            fail_reason = failed_videos[vid_id]
+                            if 'bot' in fail_reason.lower() or 'authentication' in fail_reason.lower():
+                                logging.debug(f"⏭️  Skipando {vid_id} (falha anterior: {fail_reason[:40]}...)")
+                                continue
+                        
                         duration = entry.get('duration') or 0
                         # Filtrar vídeos muito curtos ou muito longos
                         if duration == 0 or (60 <= duration <= 1200):
@@ -242,7 +345,7 @@ class AutoManager:
                     safe_name = f"auto_{vid_id}"
                     output_path = os.path.join(_AUTO_DOWNLOADS_DIR, f"{safe_name}.mp4")
 
-                    logging.info(f"⬇️  AutoManager a descarregar: {title}")
+                    logging.debug(f"⬇️  AutoManager a descarregar: {title}")
 
                     try:
                         ydl_opts_dl = {
@@ -258,10 +361,11 @@ class AutoManager:
                             'no_warnings': True,
                             'noprogress': True,
                             'socket_timeout': 30,
-                            'retries': 3,
-                            'fragment_retries': 3,
+                            'retries': 2,  # Reduzido de 3 para 2 (menos tentativas = menos erro spam)
+                            'fragment_retries': 2,  # Reduzido de 3 para 2
                             'file_access_retries': 10,      # Windows file lock fix
                             'windowsfilenames': True,
+                            'logger': _SilentYDLLogger(),  # Logger customizado para suprimir spam
                         }
 
                         # Aplicar proxy rotativa (apenas 3 proxies fixas)
@@ -277,6 +381,12 @@ class AutoManager:
                         if os.path.exists(output_path) and os.path.getsize(output_path) > 50000:
                             downloaded_ids.add(vid_id)
                             _save_downloaded_ids(downloaded_ids)
+                            
+                            # ✅ NOVO: Remover do cache de erros se conseguiu fazer download
+                            if vid_id in failed_videos:
+                                del failed_videos[vid_id]
+                                _save_failed_videos(failed_videos)
+                            
                             size_mb = os.path.getsize(output_path) / (1024 * 1024)
                             download_count += 1
                             logging.info(f"   ✅ Descarregado: {title} ({size_mb:.1f}MB)")
@@ -284,10 +394,27 @@ class AutoManager:
                             # Ficheiro inválido, remover
                             if os.path.exists(output_path):
                                 os.remove(output_path)
-                            logging.warning(f"   ⚠️ Download falhou ou ficheiro inválido: {title}")
+                            logging.debug(f"   ⚠️ Download falhou ou ficheiro inválido: {title}")
+                            
+                            # Marcar como erro genérico
+                            failed_videos[vid_id] = "Ficheiro inválido ou download incompleto"
+                            _save_failed_videos(failed_videos)
 
                     except Exception as dl_err:
-                        logging.error(f"   ❌ Erro ao descarregar {title}: {dl_err}")
+                        erro_str = str(dl_err)
+                        
+                        # ✅ NOVO: Rastrear se é erro de bot-detection
+                        if any(x in erro_str.lower() for x in ['bot', 'sign in', 'cookies', 'authentication', 'age']):
+                            fail_reason = "Bot-detection/Autenticação necessária"
+                            logging.debug(f"   ⏭️  {title}: {fail_reason} (será skipado em futuras tentativas)")
+                        else:
+                            fail_reason = erro_str[:100]
+                            logging.error(f"   ❌ Erro ao descarregar {title}: {fail_reason}")
+                        
+                        # Guardar falha no cache
+                        failed_videos[vid_id] = fail_reason
+                        _save_failed_videos(failed_videos)
+                        
                         # Limpar ficheiros parciais
                         for ext in ('', '.part', '.ytdl', '.temp'):
                             p = output_path + ext

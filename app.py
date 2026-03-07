@@ -36,13 +36,18 @@ import shutil as shell_utils
 
 import database as db
 from worker import worker
-from auto_manager import auto_manager, configure_auto_manager
 
 try:
     import proxy_rotator
     _HAS_PROXY = True
 except ImportError:
     _HAS_PROXY = False
+
+try:
+    import credentials_rotation
+    _HAS_CREDENTIALS_ROTATION = True
+except ImportError:
+    _HAS_CREDENTIALS_ROTATION = False
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
@@ -89,6 +94,40 @@ def _current_clip_status_for_video(source_video_id):
 import re
 
 
+def _extract_info_with_retries(ydl_opts, url, **kwargs):
+    """
+    Extrai info do YouTube com retry automático (máximo 3 tentativas).
+    Se a URL está throttled/bloqueada, para após 3 tentativas em vez de ficar preso.
+    Args:
+        ydl_opts (dict): Opções do yt-dlp
+        url (str): URL a extrair
+        **kwargs: argumentos adicionais para extract_info
+    Returns:
+        dict ou None: informações extraídas, ou None se falhar em todas as tentativas
+    """
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            import yt_dlp
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False, **kwargs) or {}
+                return info
+        except Exception as e:
+            err_str = str(e).lower()
+            # Se for erro de throttle/bot check, não vale a pena tentar novamente
+            if "sign in" in err_str or "bot" in err_str or "429" in err_str or "403" in err_str:
+                logging.warning(f"   ⚠️ YouTube throttle/bot check na tentativa {attempt}/{max_retries}: {str(e)[:100]}")
+                if attempt >= max_retries:
+                    logging.error(f"   ❌ Falha após {max_retries} tentativas - YouTube bloqueou acesso (bot check)")
+                    return None
+                time.sleep(2 ** attempt)  # exponential backoff: 2s, 4s, 8s
+            else:
+                # Outro erro, desistir logo
+                logging.error(f"   ❌ Erro ao extrair {url}: {e}")
+                return None
+    return None
+
+
 def _normalize_channel_url(url):
     """Normaliza uma URL de canal YouTube para o formato /videos.
     Aceita formatos:
@@ -123,8 +162,7 @@ def _extract_channel_thumbnail(channel_url):
             "no_warnings": True,
         }
         # Tenta sem /videos primeiro (funciona mesmo para canais sem vídeos)
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(clean_url, download=False) or {}
+        info = _extract_info_with_retries(ydl_opts, clean_url) or {}
         # yt-dlp devolve os thumbnails do canal no campo 'thumbnails'
         for t in reversed(info.get("thumbnails") or []):
             url = t.get("url", "")
@@ -138,6 +176,31 @@ def _extract_channel_thumbnail(channel_url):
         return ""
     except Exception:
         return ""
+
+
+def _resolve_local_channel_for_uploaded_video(expected_channel_id, youtube_channel_id="", youtube_channel_title=""):
+    """Resolve o canal local (DB) a partir do canal real do vídeo no YouTube.
+
+    Retorna (resolved_channel_id, reason). Se não conseguir mapear, devolve o canal esperado.
+    """
+    channels = db.get_channels() or []
+
+    yt_id = (youtube_channel_id or "").strip()
+    yt_title = (youtube_channel_title or "").strip().lower()
+
+    if yt_id:
+        for ch in channels:
+            if (ch.get("youtube_channel_id") or "").strip() == yt_id:
+                return ch.get("id") or expected_channel_id, "youtube_channel_id"
+
+    if yt_title:
+        for ch in channels:
+            local_yt_name = (ch.get("youtube_channel_name") or "").strip().lower()
+            local_name = (ch.get("name") or "").strip().lower()
+            if yt_title and (yt_title == local_yt_name or yt_title == local_name):
+                return ch.get("id") or expected_channel_id, "channel_name"
+
+    return expected_channel_id, "expected"
 
 
 def _get_youtube_service(credentials_path, token_path=None):
@@ -231,10 +294,114 @@ def _get_youtube_service(credentials_path, token_path=None):
         return None, logs
 
 
-def _upload_video_to_youtube(service, video_path, title, description="", tags=None, category="22", privacy="private"):
-    """Faz upload de um vídeo para o YouTube.
+def _is_quota_exceeded_error(error):
+    err_str = str(error or "")
+    err_lower = err_str.lower()
+    return (
+        "quotaexceeded" in err_lower
+        or "youtube.quota" in err_lower
+        or "exceeded your" in err_lower and "quota" in err_lower
+    )
+
+
+def _upload_with_credential_rotation(
+    fallback_credentials_path,
+    video_path,
+    title,
+    description="",
+    tags=None,
+    category="22",
+    privacy="private",
+    publish_at=None,
+):
+    """Faz upload com rotação automática de credenciais quando quota esgota.
+    PRIORIDADE: Usa sempre as credenciais do canal (fallback_credentials_path) primeiro.
+    Só recorre à rotação de credenciais se as do canal falharem por quota.
+    Retorna (video_id, url, service, logs, error_message, used_credentials_path)."""
+    logs = []
+    service = None
+    attempted_credentials = set()
+    last_error = None
+    used_creds_path = None  # Rastreia qual credencial foi efetivamente usada
+
+    # Construir lista ordenada de credenciais a tentar:
+    # 1º — Credenciais do canal específico (prioridade absoluta)
+    # 2º — Credenciais da rotação (fallback para quota), TODAS elas
+    creds_queue = []
+
+    # Canal primeiro
+    if fallback_credentials_path and os.path.exists(fallback_credentials_path):
+        creds_queue.append(fallback_credentials_path)
+
+    # Depois credenciais da rotação (excluindo a do canal para não repetir, usar TODAS)
+    if _HAS_CREDENTIALS_ROTATION:
+        try:
+            rotation_list = getattr(credentials_rotation, "CREDENTIALS_LIST", []) or []
+            for rot_cred in rotation_list:
+                if rot_cred and os.path.exists(rot_cred) and os.path.abspath(rot_cred) != os.path.abspath(fallback_credentials_path or ""):
+                    creds_queue.append(rot_cred)
+        except Exception:
+            pass
+
+    if not creds_queue:
+        last_error = "Credenciais OAuth não encontradas"
+        logs.append(f"FALHOU: {last_error}")
+        return None, None, service, logs, last_error, None
+
+    total_attempts = len(creds_queue)
+
+    for attempt, creds_path in enumerate(creds_queue):
+        if creds_path in attempted_credentials:
+            continue
+        attempted_credentials.add(creds_path)
+
+        logs.append(f"Tentativa {attempt + 1}/{total_attempts} com: {os.path.basename(creds_path)}")
+        service, auth_logs = _get_youtube_service(creds_path)
+        logs.extend(auth_logs)
+        if not service:
+            last_error = "Falha na autenticação"
+            continue
+
+        try:
+            video_id, url, upload_logs = _upload_video_to_youtube(
+                service,
+                video_path,
+                title,
+                description,
+                tags,
+                category=category,
+                privacy=privacy,
+                raise_on_quota=True,
+                publish_at=publish_at,
+            )
+            logs.extend(upload_logs)
+            if video_id:
+                used_creds_path = creds_path  # Registar credencial que funcionou
+                return video_id, url, service, logs, None, used_creds_path
+            last_error = "Falha no upload"
+            break
+        except Exception as e:
+            last_error = str(e)
+            if _is_quota_exceeded_error(e):
+                logs.append("Quota excedida nesta credencial")
+                continue  # Tentar próxima credencial
+            logs.append(f"FALHOU: {e}")
+            break
+
+    return None, None, service, logs, (last_error or "Falha no upload"), None
+
+
+def _upload_video_to_youtube(service, video_path, title, description="", tags=None, category="22", privacy="private", raise_on_quota=False, publish_at=None):
+    """Faz upload de um vídeo para o YouTube com retry automático em timeouts.
+    
+    Args:
+        publish_at (datetime, optional): Quando fornecido, agenda o vídeocomo privado e define publishAt (ISO 8601 format).
+    
     Retorna (video_id, url, logs)."""
     from googleapiclient.http import MediaFileUpload
+    import logging
+    import time
+    
     logs = []
 
     if not os.path.exists(video_path):
@@ -256,16 +423,36 @@ def _upload_video_to_youtube(service, video_path, title, description="", tags=No
             "selfDeclaredMadeForKids": False,
         },
     }
+    
+    # Adicionar agendamento se fornecido
+    if publish_at:
+        from datetime import datetime, timezone as _tz
+        # Converter para ISO 8601 format em UTC
+        if isinstance(publish_at, datetime):
+            # YouTube API requer formato ISO 8601 em UTC
+            if publish_at.tzinfo is None:
+                # Naive datetime (hora local) → converter para UTC
+                local_dt = publish_at.astimezone()  # attach local tz
+                utc_dt = local_dt.astimezone(_tz.utc)
+            else:
+                utc_dt = publish_at.astimezone(_tz.utc)
+            publish_at_str = utc_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        else:
+            publish_at_str = publish_at
+        
+        body["status"]["publishAt"] = publish_at_str
+        logs.append(f"Agendado para: {publish_at_str}")
 
     logs.append(f"Título: {title[:100]}")
     logs.append(f"Privacidade: {privacy}")
     logs.append("A iniciar upload...")
     
-    import logging
     logging.info(f"📤 INICIANDO UPLOAD PARA YOUTUBE")
     logging.info(f"   Título: {title[:100]}")
     logging.info(f"   Tamanho: {file_size / 1024 / 1024:.1f} MB")
     logging.info(f"   Privacidade: {privacy}")
+    if publish_at:
+        logging.info(f"   📅 Agendamento: {body['status'].get('publishAt', 'N/A')}")
 
     try:
         media = MediaFileUpload(video_path, chunksize=1024 * 1024, resumable=True)
@@ -273,16 +460,37 @@ def _upload_video_to_youtube(service, video_path, title, description="", tags=No
 
         response = None
         last_logged_pct = 0
+        chunk_retry_count = 0
+        max_chunk_retries = 3
+        
         while response is None:
-            status, response = req.next_chunk()
-            if status:
-                pct = int(status.progress() * 100)
-                # Log detalhado no terminal a cada 10%
-                if pct >= last_logged_pct + 10:
-                    logging.info(f"   📤 Upload: {pct}% ({status.resumable_progress / 1024 / 1024:.1f} MB)")
-                    last_logged_pct = pct
-                # Log simplificado para interface
-                logs.append(f"Upload: {pct}%")
+            try:
+                status, response = req.next_chunk()
+                chunk_retry_count = 0  # Reset retry counter on success
+                
+                if status:
+                    pct = int(status.progress() * 100)
+                    # Log detalhado no terminal a cada 10%
+                    if pct >= last_logged_pct + 10:
+                        logging.info(f"   📤 Upload: {pct}% ({status.resumable_progress / 1024 / 1024:.1f} MB)")
+                        last_logged_pct = pct
+                    # Log simplificado para interface
+                    logs.append(f"Upload: {pct}%")
+                    
+            except (TimeoutError, ConnectionError, OSError) as e:
+                # Erros de rede/timeout — tentar novamente com backoff
+                if chunk_retry_count < max_chunk_retries:
+                    chunk_retry_count += 1
+                    wait_time = 2 ** chunk_retry_count  # exponential backoff: 2s, 4s, 8s
+                    logging.warning(f"⚠️ Erro temporário (tentativa {chunk_retry_count}/{max_chunk_retries}): {e}")
+                    logging.warning(f"   A tentar novamente em {wait_time}s...")
+                    logs.append(f"Erro temporário, retentando em {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    # Após 3 tentativas, desistir
+                    logging.error(f"❌ Falha no upload após {max_chunk_retries} retentativas: {e}")
+                    raise  # Re-raise para capturar no bloco externo
 
         video_id = response.get("id", "")
         url = f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
@@ -293,6 +501,8 @@ def _upload_video_to_youtube(service, video_path, title, description="", tags=No
         logging.info(f"   URL: {url}")
         return video_id, url, logs
     except Exception as e:
+        if raise_on_quota and _is_quota_exceeded_error(e):
+            raise
         logs.append(f"ERRO no upload: {e}")
         logging.error(f"❌ ERRO NO UPLOAD: {e}")
         import traceback
@@ -626,6 +836,20 @@ def api_bulk_queue():
             if r:
                 results["updated"] += 1
 
+    elif action == "interlace_channels":
+        # Distribui os vídeos alternadamente entre os canais disponíveis
+        channels = db.get_channels()
+        if not channels:
+            return jsonify({"error": "Nenhum canal disponível"}), 400
+        
+        # Intercala os canais: vídeo[0] -> canal[0], vídeo[1] -> canal[1], etc.
+        for idx, item_id in enumerate(ids):
+            channel_idx = idx % len(channels)
+            channel_id = channels[channel_idx]["id"]
+            r = db.update_queue_item(item_id, channel_id=channel_id)
+            if r:
+                results["updated"] += 1
+
     else:
         return jsonify({"error": f"Ação desconhecida: {action}"}), 400
 
@@ -755,22 +979,22 @@ def api_add_channel():
                 "quiet": True, "skip_download": True, "extract_flat": True,
                 "playlistend": 1, "ignoreerrors": True, "no_warnings": True,
             }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(clean_url, download=False) or {}
+            info = _extract_info_with_retries(ydl_opts, clean_url) or {}
             update_data = {}
-            for t in reversed(info.get("thumbnails") or []):
-                url = t.get("url", "")
-                if url and ("yt3.ggpht" in url or "yt3.googleusercontent" in url):
-                    update_data["channel_thumbnail"] = url
-                    break
-            if info.get("channel"):
-                update_data["youtube_channel_name"] = info["channel"]
-            if info.get("channel_id"):
-                update_data["youtube_channel_id"] = info["channel_id"]
-            if info.get("channel_follower_count"):
-                update_data["youtube_subscribers"] = str(info["channel_follower_count"])
-            if update_data:
-                ch = db.update_channel(ch["id"], **update_data)
+            if info:
+                for t in reversed(info.get("thumbnails") or []):
+                    url = t.get("url", "")
+                    if url and ("yt3.ggpht" in url or "yt3.googleusercontent" in url):
+                        update_data["channel_thumbnail"] = url
+                        break
+                if info.get("channel"):
+                    update_data["youtube_channel_name"] = info["channel"]
+                if info.get("channel_id"):
+                    update_data["youtube_channel_id"] = info["channel_id"]
+                if info.get("channel_follower_count"):
+                    update_data["youtube_subscribers"] = str(info["channel_follower_count"])
+                if update_data:
+                    ch = db.update_channel(ch["id"], **update_data)
         except Exception:
             pass
 
@@ -1045,8 +1269,7 @@ def api_refresh_channel_info(channel_id):
             "quiet": True, "skip_download": True, "extract_flat": True,
             "playlistend": 1, "ignoreerrors": True, "no_warnings": True,
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(clean_url, download=False) or {}
+        info = _extract_info_with_retries(ydl_opts, clean_url) or {}
 
         # Thumbnail
         for t in reversed(info.get("thumbnails") or []):
@@ -1101,8 +1324,7 @@ def api_get_channel_videos(channel_id):
             "ignoreerrors": True,
             "no_warnings": True,
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(videos_url, download=False) or {}
+        info = _extract_info_with_retries(ydl_opts, videos_url) or {}
 
         entries = info.get("entries") or []
         videos = []
@@ -1188,15 +1410,13 @@ def api_upload_video(channel_id):
         return jsonify({"error": "Caminho do vídeo inválido"}), 400
 
     creds_path = channel.get("credentials_path", "").strip()
-    if not creds_path:
-        return jsonify({"error": "Canal sem credenciais configuradas"}), 400
-
-    service, auth_logs = _get_youtube_service(creds_path)
-    if not service:
-        return jsonify({"error": "Falha na autenticação", "logs": auth_logs}), 400
-
-    video_id, url, upload_logs = _upload_video_to_youtube(
-        service, video_path, title, description, tags, privacy=privacy
+    video_id, url, _service, rotation_logs, error_message, _actual_creds = _upload_with_credential_rotation(
+        creds_path,
+        video_path,
+        title,
+        description,
+        tags,
+        privacy=privacy,
     )
 
     if video_id:
@@ -1204,12 +1424,12 @@ def api_upload_video(channel_id):
             "success": True,
             "video_id": video_id,
             "url": url,
-            "logs": auth_logs + upload_logs
+            "logs": rotation_logs
         })
     return jsonify({
         "success": False,
-        "error": "Falha no upload",
-        "logs": auth_logs + upload_logs
+        "error": error_message or "Falha no upload",
+        "logs": rotation_logs
     }), 400
 
 
@@ -1533,7 +1753,15 @@ def api_publish_review_clip(clip_id):
 
     # Verificar credenciais
     creds_path = channel.get("credentials_path", "").strip()
-    if not creds_path or not os.path.exists(creds_path):
+    has_rotation_credentials = False
+    if _HAS_CREDENTIALS_ROTATION:
+        try:
+            current_rot = credentials_rotation.get_current_credentials()
+            has_rotation_credentials = bool(current_rot and os.path.exists(current_rot))
+        except Exception:
+            has_rotation_credentials = False
+
+    if (not creds_path or not os.path.exists(creds_path)) and not has_rotation_credentials:
         logs.append("AVISO: Canal sem credenciais OAuth — a publicar apenas localmente")
         result = db.publish_review_clip(clip_id, publish_channel_id)
         if result:
@@ -1543,26 +1771,17 @@ def api_publish_review_clip(clip_id):
             return jsonify({"success": True, "logs": logs, "local_only": True, "video": result.get("video")})
         return jsonify({"success": False, "logs": logs, "error": "Erro ao publicar"})
 
-    logs.append(f"OK — Credenciais: {os.path.basename(creds_path)}")
+    if creds_path and os.path.exists(creds_path):
+        logs.append(f"OK — Credenciais fallback: {os.path.basename(creds_path)}")
+    if has_rotation_credentials:
+        logs.append("OK — Rotação automática de credenciais ativa")
 
     # Marcar clip como "uploading"
     db.update_review_clip(clip_id, status="uploading")
 
-    # Autenticação OAuth
+    # Upload com autenticação OAuth + rotação automática por quota
     logs.append("")
-    logs.append("[4/6] A autenticar com YouTube API...")
-    try:
-        service, auth_logs = _get_youtube_service(creds_path)
-        logs.extend(auth_logs)
-        if not service:
-            logs.append("FALHOU: Não foi possível autenticar")
-            db.update_review_clip(clip_id, status="pending")
-            return jsonify({"success": False, "logs": logs, "error": "Falha na autenticação"})
-        logs.append("OK — Autenticação concluída!")
-    except Exception as e:
-        logs.append(f"FALHOU: {e}")
-        db.update_review_clip(clip_id, status="pending")
-        return jsonify({"success": False, "logs": logs, "error": str(e)})
+    logs.append("[4/6] A autenticar + upload com rotação de credenciais...")
 
     # Configurações de publicação do canal
     privacy = channel.get("default_privacy", "private")
@@ -1632,6 +1851,20 @@ def api_publish_review_clip(clip_id):
     tags = [t.strip() for t in (default_tags).split(",") if t.strip()]
     tags = list(dict.fromkeys(tags + hashtags_from_desc))  # Remove duplicatas
 
+    # AGENDAMENTO AUTOMÁTICO
+    # Se agendamento está ativo, calcula próximo slot e faz upload como "private" com publishAt
+    publish_at = None
+    schedule_enabled = settings.get("schedule_enabled", True)
+    
+    if schedule_enabled:
+        from datetime import datetime
+        publish_at = db.get_next_scheduled_slot(channel.get("id"))
+        if publish_at:
+            privacy = "private"  # Sempre privado com agendamento
+            logs.append("")
+            logs.append(f"📅 Agendamento automático ativo")
+            logs.append(f"→ Publicação agendada para: {publish_at.strftime('%Y-%m-%d %H:%M')}")
+    
     logs.append("")
     logs.append("[5/6] A fazer upload para o YouTube...")
     logs.append(f"→ Privacidade: {privacy}")
@@ -1639,26 +1872,46 @@ def api_publish_review_clip(clip_id):
     if tags:
         logs.append(f"→ Tags: {', '.join(tags[:5])}")
 
-    try:
-        video_id, yt_url, upload_logs = _upload_video_to_youtube(
-            service, clip_path, title, description, tags,
-            category=category, privacy=privacy
-        )
-        logs.extend(upload_logs)
-    except Exception as e:
-        logs.append(f"FALHOU: Erro no upload: {e}")
+    video_id, yt_url, service, upload_logs, upload_error, actual_creds_path = _upload_with_credential_rotation(
+        creds_path,
+        clip_path,
+        title,
+        description,
+        tags,
+        category=category,
+        privacy=privacy,
+        publish_at=publish_at,
+    )
+    logs.extend(upload_logs)
+
+    if upload_error and not video_id:
+        logs.append(f"FALHOU: Erro no upload: {upload_error}")
         db.update_review_clip(clip_id, status="pending")
-        return jsonify({"success": False, "logs": logs, "error": str(e)})
+        return jsonify({"success": False, "logs": logs, "error": upload_error})
 
     if not video_id:
         logs.append("FALHOU: Upload não retornou video ID")
         db.update_review_clip(clip_id, status="pending")
         return jsonify({"success": False, "logs": logs, "error": "Upload falhou"})
 
+    # Detetar o canal REAL onde foi publicado (baseado na credencial que funcionou)
+    actual_channel_id = publish_channel_id
+    if actual_creds_path:
+        channels = db.get_channels()
+        for ch in channels:
+            ch_creds = ch.get("credentials_path", "").strip()
+            if ch_creds and os.path.abspath(ch_creds) == os.path.abspath(actual_creds_path):
+                actual_channel_id = ch["id"]
+                if actual_channel_id != publish_channel_id:
+                    logs.append(f"ℹ️ Canal REAL: {ch.get('name', actual_channel_id)} (credenciais {os.path.basename(actual_creds_path)})")
+                break
+
     # Verificar vídeo no YouTube
     logs.append("")
     logs.append("[6/6] A verificar vídeo no YouTube Studio...")
     yt_video_info = {}
+    youtube_channel_id = ""
+    youtube_channel_title = ""
     try:
         resp = service.videos().list(
             part="snippet,status,statistics,contentDetails",
@@ -1671,10 +1924,14 @@ def api_publish_review_clip(clip_id):
             status_info = v.get("status", {})
             stats = v.get("statistics", {})
             content = v.get("contentDetails", {})
+            youtube_channel_id = snippet.get("channelId", "")
+            youtube_channel_title = snippet.get("channelTitle", "")
 
             yt_video_info = {
                 "youtube_video_id": video_id,
                 "youtube_url": yt_url,
+                "youtube_channel_id": youtube_channel_id,
+                "youtube_channel_title": youtube_channel_title,
                 "youtube_title": snippet.get("title", title),
                 "youtube_description": snippet.get("description", ""),
                 "youtube_thumbnail": snippet.get("thumbnails", {}).get("high", {}).get("url", "")
@@ -1703,18 +1960,43 @@ def api_publish_review_clip(clip_id):
     except Exception as e:
         logs.append(f"AVISO: Não foi possível verificar: {e}")
 
+    # Determina o canal local real do upload (importantíssimo quando há rotação de credenciais)
+    resolved_channel_id, resolve_reason = _resolve_local_channel_for_uploaded_video(
+        expected_channel_id=publish_channel_id,
+        youtube_channel_id=youtube_channel_id,
+        youtube_channel_title=youtube_channel_title,
+    )
+
+    if resolved_channel_id != publish_channel_id:
+        logs.append("")
+        logs.append("AVISO: Canal real do upload difere do canal selecionado")
+        logs.append(f"→ Canal selecionado: {publish_channel_id}")
+        logs.append(f"→ Canal real (mapeado): {resolved_channel_id} [{resolve_reason}]")
+
     # Publicar na BD com dados reais do YouTube
-    result = db.publish_review_clip(clip_id, publish_channel_id)
+    result = db.publish_review_clip(clip_id, resolved_channel_id)
     if result and result.get("video"):
         # Atualizar o vídeo publicado com dados reais do YouTube
         posted_id = result["video"]["id"]
         update_data = {
             "youtube_url": yt_url,
             "youtube_video_id": video_id,
+            "channel_id": resolved_channel_id,
             "status": "published",
             **yt_video_info,
         }
         db.update_posted_video(posted_id, **update_data)
+
+    # Se agendou no canal A mas publicou no canal B, mover slot reservado.
+    if publish_at and resolved_channel_id and resolved_channel_id != publish_channel_id:
+        try:
+            db.reassign_scheduled_upload_channel(publish_at, publish_channel_id, resolved_channel_id)
+        except Exception as e:
+            logs.append(f"AVISO: Falha ao mover slot de agendamento entre canais: {e}")
+
+    # Garantir que o clip também reflete o canal real.
+    if resolved_channel_id:
+        db.update_review_clip(clip_id, channel_id=resolved_channel_id)
 
     logs.append("")
     logs.append("=== PUBLICAÇÃO CONCLUÍDA COM SUCESSO! ===")
@@ -1751,6 +2033,291 @@ def api_update_settings():
     data = request.json or {}
     s = db.update_settings(**data)
     return jsonify(s)
+
+
+# ═══════════════════════════════════════════════
+#  API — AGENDAMENTOS
+# ═══════════════════════════════════════════════
+
+@app.route("/api/schedules", methods=["GET"])
+def api_get_schedules():
+    """Retorna todos os vídeos agendados e slots reservados."""
+    return jsonify(db.get_all_scheduled_videos())
+
+
+@app.route("/api/schedules/rearrange", methods=["POST"])
+def api_rearrange_schedules():
+    """Reagenda todos os slots futuros com os parâmetros fornecidos."""
+    data = request.json or {}
+    channel_id = data.get("channel_id") or None
+    interval_hours = float(data.get("interval_hours", 2))
+    videos_per_day = int(data.get("videos_per_day", 12))
+    start_time = data.get("start_time", "08:00")
+    end_time = data.get("end_time", "22:00")
+    
+    # Validar parâmetros
+    interval_hours = max(0.5, min(24, interval_hours))
+    videos_per_day = max(1, min(50, videos_per_day))
+    
+    # Guardar config nas settings
+    db.update_settings(
+        schedule_interval_hours=interval_hours,
+        schedule_videos_per_day=videos_per_day,
+        schedule_start_time=start_time,
+        schedule_end_time=end_time,
+    )
+    
+    rescheduled = db.rearrange_scheduled_slots(
+        channel_id=channel_id,
+        interval_hours=interval_hours,
+        videos_per_day=videos_per_day,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    
+    # Atualizar publishAt no YouTube para vídeos já publicados
+    yt_updated = 0
+    yt_errors = []
+    if rescheduled:
+        channels = db.get_channels()
+        ch_map = {ch["id"]: ch for ch in channels}
+        by_channel = {}
+        for rv in rescheduled:
+            ch = rv.get("channel_id", "")
+            if ch not in by_channel:
+                by_channel[ch] = []
+            by_channel[ch].append(rv)
+        
+        try:
+            import credentials_rotation
+            rotation_list = getattr(credentials_rotation, "CREDENTIALS_LIST", []) or []
+        except Exception:
+            rotation_list = []
+        
+        for ch_id, videos in by_channel.items():
+            channel = ch_map.get(ch_id)
+            if not channel:
+                continue
+            creds_path = channel.get("credentials_path", "").strip()
+            
+            creds_queue = []
+            if creds_path and os.path.exists(creds_path):
+                creds_queue.append(creds_path)
+            for rot_cred in rotation_list:
+                if rot_cred and os.path.exists(rot_cred) and os.path.abspath(rot_cred) != os.path.abspath(creds_path or ""):
+                    creds_queue.append(rot_cred)
+            
+            if not creds_queue:
+                continue
+            
+            service = None
+            current_creds_idx = 0
+            
+            def _get_svc():
+                nonlocal service, current_creds_idx
+                while current_creds_idx < len(creds_queue):
+                    try:
+                        svc, _ = _get_youtube_service(creds_queue[current_creds_idx])
+                        if svc:
+                            service = svc
+                            return True
+                    except Exception:
+                        pass
+                    current_creds_idx += 1
+                return False
+            
+            if not _get_svc():
+                yt_errors.append(f"Auth failed for channel {ch_id}")
+                continue
+            
+            for rv in videos:
+                updated = False
+                while not updated:
+                    try:
+                        service.videos().update(
+                            part="status",
+                            body={
+                                "id": rv["youtube_video_id"],
+                                "status": {
+                                    "privacyStatus": "private",
+                                    "publishAt": rv["youtube_publish_at"],
+                                },
+                            },
+                        ).execute()
+                        yt_updated += 1
+                        updated = True
+                    except Exception as e:
+                        if "quotaExceeded" in str(e):
+                            current_creds_idx += 1
+                            if not _get_svc():
+                                yt_errors.append(f"{rv['youtube_video_id']}: Quota excedida em todas as credenciais")
+                                break
+                        else:
+                            yt_errors.append(f"Failed to update {rv['youtube_video_id']}: {e}")
+                            break
+    
+    result = db.get_all_scheduled_videos()
+    result["youtube_updated"] = yt_updated
+    if yt_errors:
+        result["youtube_errors"] = yt_errors
+    return jsonify(result)
+
+
+@app.route("/api/schedules/sync-youtube", methods=["POST"])
+def api_sync_youtube_schedules():
+    """Sincroniza as datas de agendamento da DB com o YouTube.
+    Atualiza o publishAt de todos os vídeos futuros no YouTube para corresponder à DB.
+    Também lê o estado real de vídeos no YouTube para atualizar a DB."""
+    import logging
+    from datetime import datetime, timezone
+    
+    posted = db.get_posted_videos() if hasattr(db, 'get_posted_videos') else db._load().get("posted_videos", [])
+    now_utc = datetime.now(timezone.utc)
+    
+    # Encontrar todos os vídeos com youtube_video_id e publish_at futuro
+    future_videos = []
+    for v in posted:
+        pub = v.get("youtube_publish_at", "")
+        yt_id = v.get("youtube_video_id", "")
+        if not pub or not yt_id:
+            continue
+        try:
+            # Parse publish_at como UTC (o Z indica UTC)
+            pub_dt = datetime.fromisoformat(pub.replace("Z", "+00:00").replace(".000+00:00", "+00:00"))
+            if pub_dt.tzinfo is None:
+                pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+            if pub_dt > now_utc:
+                future_videos.append(v)
+        except Exception:
+            try:
+                pub_dt = datetime.strptime(pub, "%Y-%m-%dT%H:%M:%S.000Z").replace(tzinfo=timezone.utc)
+                if pub_dt > now_utc:
+                    future_videos.append(v)
+            except Exception:
+                continue
+    
+    if not future_videos:
+        return jsonify({"ok": True, "youtube_updated": 0, "message": "Nenhum vídeo futuro encontrado"})
+    
+    # Agrupar por canal
+    channels = db.get_channels()
+    ch_map = {ch["id"]: ch for ch in channels}
+    by_channel = {}
+    for v in future_videos:
+        ch = v.get("channel_id", "")
+        if ch not in by_channel:
+            by_channel[ch] = []
+        by_channel[ch].append(v)
+    
+    # Construir lista de credenciais (canal + rotação) para lidar com quota
+    try:
+        import credentials_rotation
+        rotation_list = getattr(credentials_rotation, "CREDENTIALS_LIST", []) or []
+    except Exception:
+        rotation_list = []
+    
+    yt_updated = 0
+    yt_errors = []
+    
+    for ch_id, videos in by_channel.items():
+        channel = ch_map.get(ch_id)
+        if not channel:
+            yt_errors.append(f"Canal {ch_id} não encontrado na DB")
+            continue
+        creds_path = channel.get("credentials_path", "").strip()
+        
+        # Construir fila de credenciais: canal primeiro, depois rotação
+        creds_queue = []
+        if creds_path and os.path.exists(creds_path):
+            creds_queue.append(creds_path)
+        for rot_cred in rotation_list:
+            if rot_cred and os.path.exists(rot_cred) and os.path.abspath(rot_cred) != os.path.abspath(creds_path or ""):
+                creds_queue.append(rot_cred)
+        
+        if not creds_queue:
+            yt_errors.append(f"Credenciais não encontradas para canal {channel.get('name', ch_id)}")
+            continue
+        
+        service = None
+        current_creds_idx = 0
+        
+        def _get_service():
+            nonlocal service, current_creds_idx
+            while current_creds_idx < len(creds_queue):
+                try:
+                    svc, _ = _get_youtube_service(creds_queue[current_creds_idx])
+                    if svc:
+                        service = svc
+                        return True
+                except Exception:
+                    pass
+                current_creds_idx += 1
+            return False
+        
+        if not _get_service():
+            yt_errors.append(f"Auth falhou para canal {channel.get('name', ch_id)}")
+            continue
+        
+        logging.info(f"📅 Sincronizando {len(videos)} vídeos do canal {channel.get('name', ch_id)} com YouTube")
+        
+        for v in videos:
+            yt_id = v["youtube_video_id"]
+            publish_at = v["youtube_publish_at"]
+            updated = False
+            while not updated:
+                try:
+                    service.videos().update(
+                        part="status",
+                        body={
+                            "id": yt_id,
+                            "status": {
+                                "privacyStatus": "private",
+                                "publishAt": publish_at,
+                            },
+                        },
+                    ).execute()
+                    yt_updated += 1
+                    updated = True
+                    logging.info(f"  ✅ {yt_id} → {publish_at}")
+                except Exception as e:
+                    if "quotaExceeded" in str(e):
+                        logging.warning(f"  ⚠️ Quota excedida, tentando próximas credenciais...")
+                        current_creds_idx += 1
+                        if not _get_service():
+                            yt_errors.append(f"{yt_id}: Quota excedida em todas as credenciais")
+                            break
+                    else:
+                        yt_errors.append(f"{yt_id}: {e}")
+                        logging.error(f"  ❌ {yt_id}: {e}")
+                        break
+    
+    return jsonify({
+        "ok": True,
+        "total_future": len(future_videos),
+        "youtube_updated": yt_updated,
+        "youtube_errors": yt_errors,
+    })
+
+
+@app.route("/api/schedules/clear", methods=["POST"])
+def api_clear_schedules():
+    """Limpa todos os agendamentos futuros."""
+    data = request.json or {}
+    channel_id = data.get("channel_id") or None
+    db.clear_all_scheduled_slots(channel_id=channel_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/schedules/config", methods=["PATCH"])
+def api_update_schedule_config():
+    """Atualiza apenas as configurações de agendamento."""
+    data = request.json or {}
+    allowed_keys = ["schedule_interval_hours", "schedule_videos_per_day", "schedule_start_time", "schedule_end_time", "schedule_enabled", "schedule_max_per_batch"]
+    filtered = {k: v for k, v in data.items() if k in allowed_keys}
+    if filtered:
+        s = db.update_settings(**filtered)
+        return jsonify(s)
+    return jsonify({"error": "Nenhum parâmetro válido"}), 400
 
 
 # ═══════════════════════════════════════════════
@@ -1875,7 +2442,7 @@ def api_fetch_video_info():
         
         logging.info(f"🔍 Fetchando info de: {url}")
         
-        # Usar yt-dlp para extrair informações
+        # Usar yt-dlp para extrair informações (com retry em caso de throttle)
         ydl_opts = {
             'quiet': False,
             'no_warnings': False,
@@ -1885,8 +2452,9 @@ def api_fetch_video_info():
         }
         
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+            info = _extract_info_with_retries(ydl_opts, url) or {}
+            if not info:
+                return jsonify({"error": "Não consegui extrair informações (YouTube throttle/bot check)"}), 400
         except Exception as e:
             logging.error(f"❌ Erro ao extrair info: {str(e)[:200]}")
             return jsonify({"error": f"Não consegui extrair informações: {str(e)[:100]}"}), 400
@@ -1931,138 +2499,8 @@ def serve_clip(filename):
 
 
 # ═══════════════════════════════════════════════
-#  AUTO MANAGER (Limpeza automática + Playlist)
-# ═══════════════════════════════════════════════
-
-@app.route("/api/auto-manager/test-playlist", methods=["POST"])
-def test_auto_manager_playlist():
-    """Testa se uma playlist é válida."""
-    try:
-        data = request.get_json(silent=True) or {}
-        playlist_url = str(data.get("playlist_url", "") or "").strip()
-        
-        if not playlist_url:
-            return jsonify({"ok": False, "error": "URL da playlist é obrigatória"}), 400
-        
-        import yt_dlp
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'extract_flat': True,
-            'playlistend': 1,
-            'socket_timeout': 15,
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(playlist_url, download=False)
-            
-            if not info:
-                return jsonify({"ok": False, "error": "Playlist não encontrada"}), 400
-            
-            if info.get('entries'):
-                count = len([e for e in info['entries'] if e])
-                return jsonify({"ok": True, "message": f"Playlist válida ({count} vídeos)"})
-            elif info.get('id'):
-                return jsonify({"ok": True, "message": "Playlist válida"})
-            else:
-                return jsonify({"ok": False, "error": "Playlist vazia"}), 400
-                
-    except Exception as e:
-        err_str = str(e).lower()
-        if "does not exist" in err_str or "not found" in err_str:
-            return jsonify({"ok": False, "error": "Playlist não existe"}), 400
-        if "invalid" in err_str:
-            return jsonify({"ok": False, "error": "URL inválida"}), 400
-        return jsonify({"ok": False, "error": str(e)[:100]}), 500
-
-
-@app.route("/api/auto-manager/config", methods=["GET"])
-def get_auto_manager_config():
-    """Retorna a configuração atual do AutoManager."""
-    config = db.get_settings().get("auto_manager", {})
-    return jsonify({
-        "enabled": config.get("enabled", False),
-        "playlist_url": config.get("playlist_url", ""),
-        "max_storage_mb": config.get("max_storage_mb", 5000),
-        "check_interval_minutes": config.get("check_interval_minutes", 15)
-    })
-
-
-@app.route("/api/auto-manager/config", methods=["POST"])
-def set_auto_manager_config():
-    """Configura o AutoManager."""
-    try:
-        data = request.get_json(silent=True) or {}
-
-        enabled_raw = data.get("enabled", False)
-        if isinstance(enabled_raw, str):
-            enabled = enabled_raw.strip().lower() in ("1", "true", "yes", "on")
-        else:
-            enabled = bool(enabled_raw)
-
-        playlist_url = str(data.get("playlist_url", "") or "").strip()
-
-        try:
-            max_storage_mb = int(data.get("max_storage_mb", 5000) or 5000)
-        except (TypeError, ValueError):
-            max_storage_mb = 5000
-
-        try:
-            check_interval_minutes = int(data.get("check_interval_minutes", 15) or 15)
-        except (TypeError, ValueError):
-            check_interval_minutes = 15
-
-        if max_storage_mb < 1000:
-            max_storage_mb = 1000
-        if check_interval_minutes < 5:
-            check_interval_minutes = 5
-
-        if enabled and not playlist_url:
-            return jsonify({"ok": False, "error": "URL da playlist é obrigatória para ativar"}), 400
-
-        # Salvar nas definições
-        settings = db.get_settings()
-        settings["auto_manager"] = {
-            "enabled": enabled,
-            "playlist_url": playlist_url,
-            "max_storage_mb": max_storage_mb,
-            "check_interval_minutes": check_interval_minutes
-        }
-        db.save_settings(settings)
-
-        # Reconfigurar o auto_manager
-        if enabled and playlist_url:
-            try:
-                configure_auto_manager(playlist_url, max_storage_mb, check_interval_minutes)
-                logging.info(f"✅ AutoManager configurado: {playlist_url}")
-                return jsonify({"ok": True, "message": "AutoManager ativado"})
-            except Exception as e:
-                logging.exception("❌ Erro ao configurar AutoManager")
-                return jsonify({"ok": False, "error": str(e)}), 500
-
-        auto_manager.stop()
-        logging.info("🛑 AutoManager desativado")
-        return jsonify({"ok": True, "message": "AutoManager desativado"})
-
-    except Exception as e:
-        logging.exception("❌ Erro inesperado em set_auto_manager_config")
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/api/auto-manager/status", methods=["GET"])
-def get_auto_manager_status():
-    """Retorna o status do AutoManager."""
-    config = db.get_settings().get("auto_manager", {})
-    return jsonify({
-        "running": auto_manager._running,
-        "enabled": config.get("enabled", False),
-        "playlist_url": config.get("playlist_url", "")
-    })
-
-
-# ═══════════════════════════════════════════════
 #  PROXY ROTATIVO
-# ═══════════════════════════════════════════════
+#  ═══════════════════════════════════════════════
 
 @app.route("/api/proxy/status", methods=["GET"])
 def get_proxy_status():
@@ -2087,6 +2525,21 @@ def refresh_proxies_api():
             logging.error(f"❌ Erro ao refrescar proxies: {e}")
     threading.Thread(target=_do_refresh, daemon=True).start()
     return jsonify({"ok": True, "message": "Refresh iniciado em background"})
+
+
+# ═══════════════════════════════════════════════
+#  CREDENCIAIS ROTATIVAS
+# ═══════════════════════════════════════════════
+
+@app.route("/api/credentials/status", methods=["GET"])
+def get_credentials_status():
+    """Status da rotação automática de credenciais."""
+    try:
+        import credentials_rotation
+        status = credentials_rotation.get_rotation_status()
+        return jsonify({"ok": True, **status})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 # ═══════════════════════════════════════════════
@@ -2115,20 +2568,6 @@ def _start_server():
                 logging.warning(f"⚠️ Erro ao iniciar proxies: {e}")
         threading.Thread(target=_init_proxies, daemon=True).start()
         logging.info("🌐 Proxy rotativo a iniciar em background...")
-
-    # ── AutoManager ──
-    settings = db.get_settings()
-    auto_config = settings.get("auto_manager", {})
-    if auto_config.get("enabled") and auto_config.get("playlist_url"):
-        try:
-            configure_auto_manager(
-                auto_config["playlist_url"],
-                auto_config.get("max_storage_mb", 5000),
-                auto_config.get("check_interval_minutes", 15)
-            )
-            logging.info("🤖 AutoManager iniciado automaticamente")
-        except Exception as e:
-            logging.error(f"❌ Erro ao iniciar AutoManager: {e}")
 
     print("\n🚀 ClipAI Interface em http://localhost:5000\n")
     is_child = os.environ.get("CLIPAI_WATCHDOG") == "1"

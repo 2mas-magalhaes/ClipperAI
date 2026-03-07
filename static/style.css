@@ -1261,10 +1261,39 @@ textarea.form-control { resize: vertical; min-height: 60px; }
     gap: 16px;
 }
 .review-card {
+    position: relative;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     overflow: hidden;
+}
+.review-card-selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-dim);
+}
+.review-select-corner {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 4;
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.review-select-cb {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.review-select-cb:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
 }
 .review-video {
     width: 100%;
@@ -1577,3 +1606,114 @@ textarea.form-control { resize: vertical; min-height: 60px; }
 }
 
 .text-muted { color: var(--text-muted); }
+
+/* ═══════════════ BTN WARNING ═══════════════ */
+.btn-warning { background: var(--orange); color: #000; border-color: var(--orange); }
+.btn-warning:hover { filter: brightness(1.1); }
+
+/* ═══════════════ AGENDAMENTOS ═══════════════ */
+#schedules-timeline {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color);
+}
+.sched-timeline-day {
+    margin-bottom: 16px;
+}
+.sched-timeline-day:last-child {
+    margin-bottom: 0;
+}
+.sched-day-header {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.sched-day-header .day-count {
+    background: var(--accent);
+    color: #fff;
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 700;
+}
+.sched-day-slots {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.sched-slot {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    transition: var(--transition);
+}
+.sched-slot.future {
+    background: rgba(76, 175, 80, 0.1);
+    border-color: var(--green);
+    color: var(--green);
+}
+.sched-slot.past {
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    opacity: 0.6;
+}
+.sched-slot i {
+    font-size: 0.7rem;
+}
+#schedules-table .sched-time {
+    font-weight: 600;
+    color: var(--accent);
+}
+#schedules-table .sched-time-past {
+    color: var(--text-muted);
+}
+.sched-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+.sched-status-badge.scheduled {
+    background: rgba(76, 175, 80, 0.15);
+    color: var(--green);
+}
+.sched-status-badge.published {
+    background: rgba(100, 181, 246, 0.15);
+    color: var(--accent);
+}
+.sched-status-badge.past {
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+}
+.sched-actions {
+    display: flex;
+    gap: 4px;
+}
+.sched-video-title {
+    font-weight: 500;
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sched-video-title a {
+    color: var(--text-primary);
+    text-decoration: none;
+}
+.sched-video-title a:hover {
+    color: var(--accent);
+}

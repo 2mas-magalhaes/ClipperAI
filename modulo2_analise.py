@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import torch
 import subprocess
@@ -76,19 +77,34 @@ def _extract_json_objects_relaxed(texto):
     return objs
 
 
-def liberar_gpu_whisper():
-    """Liberta a VRAM do Whisper para o Ollama ter GPU total.
-    Sem isto, Whisper ocupa ~2GB e o Ollama offloads para CPU (10x mais lento)."""
+def liberar_gpu_whisper(aggressive=False):
+    """Liberta VRAM usada pelo Whisper de forma segura.
+
+    No Windows, descarregar o modelo CUDA agressivamente pode terminar o processo
+    em alguns cenários (acessos nativos do backend CTranslate2).
+
+    Args:
+        aggressive (bool):
+            - False (padrão): só limpa cache CUDA, mantendo o modelo em memória.
+            - True: tenta descarregar o modelo (mais VRAM livre, maior risco no Windows).
+    """
     global _whisper_model_cache
-    if _whisper_model_cache is None:
-        return
+
     try:
-        _whisper_model_cache = None
-        import gc
-        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        print("  🧹 VRAM libertada (modelo Whisper descarregado)")
+
+        is_windows = os.name == "nt"
+        if aggressive and not is_windows and _whisper_model_cache is not None:
+            _whisper_model_cache = None
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            print("  🧹 VRAM libertada (modelo Whisper descarregado)")
+        else:
+            if _whisper_model_cache is not None:
+                print("  🧹 Cache CUDA limpa (modo seguro, modelo Whisper mantido)")
     except Exception as e:
         print(f"  ⚠️ Aviso ao libertar GPU: {e}")
 
@@ -194,22 +210,27 @@ def transcrever_audio_whisper(caminho_audio, progress_callback=None):
         # CPU: 'small' (bom equilíbrio velocidade/qualidade)
         # GPU: 'medium' ou 'large-v3' (máxima qualidade)
         modelo = "medium" if gpu_disponivel else "small"
-        print(f"  📦 Carregando modelo Whisper '{modelo}'...")
         # GTX 1070 é sm_61 → CTranslate2 só suporta int8 e float32 nesta GPU
         # float16/int8_float16 requerem sm_70+ (Volta+)
-        # int8 na GPU ainda é muito mais rápido que CPU
         compute_type = "int8" if gpu_disponivel else "int8"
         global _whisper_model_cache
-        model = WhisperModel(
-            modelo,
-            device=device,
-            compute_type=compute_type,
-            num_workers=4,          # Workers paralelos para I/O
-            cpu_threads=4           # Threads para operações CPU auxiliares
-        )
-        # Guarda referência global para EVITAR que o GC chame o destrutor
-        # CTranslate2 crasha (SIGABRT) ao destruir o modelo CUDA
-        _whisper_model_cache = model
+
+        # Reutilizar modelo em cache para evitar re-inicialização (e crash do destrutor CUDA)
+        if _whisper_model_cache is None:
+            print(f"  📦 Carregando modelo Whisper '{modelo}'...")
+            model = WhisperModel(
+                modelo,
+                device=device,
+                compute_type=compute_type,
+                num_workers=1,      # 1 worker — múltiplos workers crasham no Windows com CUDA
+                cpu_threads=0,      # 0 = usa todos os cores disponíveis automaticamente
+            )
+            # Guarda referência global para EVITAR que o GC chame o destrutor
+            # CTranslate2 crasha (SIGABRT) ao destruir o modelo CUDA
+            _whisper_model_cache = model
+        else:
+            print(f"  ♻️  Reutilizando modelo Whisper em cache")
+            model = _whisper_model_cache
         
         if progress_callback:
             progress_callback(20, "Transcrevendo")
@@ -218,16 +239,15 @@ def transcrever_audio_whisper(caminho_audio, progress_callback=None):
         # vad_filter=True filtra silêncios e música (só transcreve fala!)
         transcribe_params = {
             "language": "pt",
-            "word_timestamps": True,   # Timestamps por palavra
-            "vad_filter": True,        # Filtra silêncios/ruído
+            "word_timestamps": True,        # Timestamps por palavra
+            "vad_filter": True,             # Filtra silêncios/ruído
+            "chunk_length": 30,             # Processa em chunks de 30s — evita OOM em vídeos longos
+            "condition_on_previous_text": False,  # Não acumula contexto — reduz uso de memória
+            "beam_size": 1,                 # Mais rápido, menos memória (1 = greedy)
         }
         
-        # GPU: beam_size=1 é o mais rápido; modelo 'medium' já garante qualidade
-        if gpu_disponivel:
-            transcribe_params["beam_size"] = 1
-        
         segments, info = model.transcribe(caminho_audio, **transcribe_params)
-        
+
         # Monta texto completo E segmentos com timestamps
         import time as _time
         t_start = _time.time()
@@ -344,21 +364,34 @@ def analisar_com_ollama(transcrição, modelo=None, progress_callback=None):
         ]
 
         if segmentos_filtrados:
+            # Montagem incremental para evitar picos de memória em vídeos longos
             linhas_transcript = []
+            chars_total = 0
+            truncado = False
             for s in segmentos_filtrados:
                 t = float(s.get("inicio", 0))
                 mm, ss = int(t // 60), int(t % 60)
-                linhas_transcript.append(f"[{mm:02d}:{ss:02d}] {s.get('texto', '').strip()}")
+                linha = f"[{mm:02d}:{ss:02d}] {s.get('texto', '').strip()}"
+                novo_total = chars_total + len(linha) + 1
+                if novo_total > CHAR_LIMIT:
+                    truncado = True
+                    break
+                linhas_transcript.append(linha)
+                chars_total = novo_total
+
             texto_timed = "\n".join(linhas_transcript)
+            if truncado:
+                texto_timed += "\n[... transcript truncated ...]"
         else:
             # fallback: texto plano sem timestamps, já a saltar os primeiros 2 min
-            texto_plano = transcrição["texto_completo"]
-            # corta aproximadamente 2 min: ~150 palavras/min × 2 = 300 palavras
-            palavras = texto_plano.split()
-            texto_timed = " ".join(palavras[300:]) if len(palavras) > 300 else texto_plano
-
-        if len(texto_timed) > CHAR_LIMIT:
-            texto_timed = texto_timed[:CHAR_LIMIT] + "\n[... transcript truncated ...]"
+            texto_plano = transcrição.get("texto_completo", "")
+            # corta aproximadamente 2 min sem split completo (mais leve em RAM)
+            partes = texto_plano.split(maxsplit=300)
+            texto_sem_intro = partes[-1] if len(partes) > 300 else texto_plano
+            if len(texto_sem_intro) > CHAR_LIMIT:
+                texto_timed = texto_sem_intro[:CHAR_LIMIT] + "\n[... transcript truncated ...]"
+            else:
+                texto_timed = texto_sem_intro
 
         # System message: força o modelo a responder APENAS em JSON e em Português
         system_msg = (

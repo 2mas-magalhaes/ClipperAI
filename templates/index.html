@@ -42,6 +42,11 @@
                 <i class="fas fa-video"></i>
                 <span>Publicados</span>
             </li>
+            <li class="nav-item" data-page="schedules">
+                <i class="fas fa-calendar-alt"></i>
+                <span>Agendamentos</span>
+                <span class="badge" id="schedules-badge">0</span>
+            </li>
             <li class="nav-item" data-page="settings">
                 <i class="fas fa-cog"></i>
                 <span>Definições</span>
@@ -150,6 +155,9 @@
                 <div class="bulk-bar-actions">
                     <button class="btn btn-sm" onclick="bulkSetChannel()" title="Mudar canal">
                         <i class="fab fa-youtube"></i> Canal
+                    </button>
+                    <button class="btn btn-sm" onclick="bulkInterlaceChannels()" title="Intercalar canais automaticamente">
+                        <i class="fas fa-random"></i> Intercalar Canais
                     </button>
                     <button class="btn btn-sm" onclick="bulkSetPrivacy()" title="Mudar visibilidade">
                         <i class="fas fa-eye"></i> Visibilidade
@@ -269,6 +277,30 @@
                 <p class="subtitle">Pré-visualizar antes de publicar (ou deixar auto-publish ativo)</p>
             </div>
 
+            <div class="queue-bulk-bar" id="review-bulk-bar" style="display:none">
+                <div class="bulk-bar-left" style="display:flex;align-items:center;gap:12px">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                        <input type="checkbox" id="review-select-all" onchange="toggleSelectAllReview(this.checked)">
+                        <span>Selecionar todos</span>
+                    </label>
+                    <span><span class="bulk-count" id="review-bulk-selected-count">0</span> selecionados</span>
+                </div>
+                <div class="bulk-bar-actions">
+                    <button class="btn btn-sm" onclick="bulkReviewSetChannel()" title="Mudar canal">
+                        <i class="fab fa-youtube"></i> Canal
+                    </button>
+                    <button class="btn btn-sm" onclick="bulkReviewInterlaceChannels()" title="Intercalar canais automaticamente">
+                        <i class="fas fa-random"></i> Intercalar Canais
+                    </button>
+                    <button class="btn btn-sm btn-success" onclick="bulkPublishReviewClips()" title="Publicar selecionados">
+                        <i class="fas fa-upload"></i> Publicar Todos
+                    </button>
+                    <button class="btn btn-sm btn-danger" onclick="bulkRejectReviewClips()" title="Rejeitar selecionados">
+                        <i class="fas fa-times"></i> Rejeitar Todos
+                    </button>
+                </div>
+            </div>
+
             <div class="review-grid" id="review-grid"></div>
             <div class="empty-state" id="review-empty" style="display:none">
                 <i class="fas fa-clapperboard"></i>
@@ -288,6 +320,101 @@
             <div class="empty-state" id="posted-empty" style="display:none">
                 <i class="fas fa-film"></i>
                 <p>Nenhum vídeo publicado ainda</p>
+            </div>
+        </div>
+
+        <!-- ═══════════════ AGENDAMENTOS ═══════════════ -->
+        <div class="page" id="page-schedules">
+            <div class="page-header">
+                <h1>Rever Agendamentos</h1>
+                <p class="subtitle">Gerir a frequência e reagendar vídeos</p>
+            </div>
+
+            <!-- Schedule Config -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-sliders-h"></i> Configuração de Agendamento</h2>
+                </div>
+                <div class="card-body">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Vídeos por dia</label>
+                            <input type="number" id="sched-videos-per-day" class="form-control" min="1" max="50" value="12">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Número máximo de vídeos a publicar por dia.</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Intervalo entre vídeos (horas)</label>
+                            <input type="number" id="sched-interval-hours" class="form-control" min="0.5" max="24" value="2" step="0.5">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Espaçamento entre cada publicação.</div>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Hora de início (diário)</label>
+                            <input type="time" id="sched-start-time" class="form-control" value="08:00">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Hora a partir da qual se publicam vídeos.</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Hora de fim (diário)</label>
+                            <input type="time" id="sched-end-time" class="form-control" value="22:00">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Hora limite para publicações do dia.</div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Canal para filtrar</label>
+                        <select id="sched-filter-channel" class="form-control">
+                            <option value="">— Todos os canais —</option>
+                        </select>
+                    </div>
+                    <div style="display:flex;gap:8px;margin-top:12px">
+                        <button class="btn btn-primary" onclick="saveScheduleConfig()">
+                            <i class="fas fa-save"></i> Guardar Configuração
+                        </button>
+                        <button class="btn btn-warning" onclick="rearrangeSchedules()">
+                            <i class="fas fa-magic"></i> Reagendar Tudo
+                        </button>
+                        <button class="btn btn-danger" onclick="clearAllSchedules()">
+                            <i class="fas fa-trash"></i> Limpar Agendamentos
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Schedule Overview -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-calendar-check"></i> Vídeos Agendados</h2>
+                    <div style="display:flex;gap:6px">
+                        <button class="btn btn-sm" onclick="syncSchedulesFromYouTube(this)" title="Buscar estado real dos vídeos no YouTube">
+                            <i class="fab fa-youtube"></i> Sincronizar com YouTube
+                        </button>
+                        <button class="btn btn-sm" onclick="fetchSchedules()">
+                            <i class="fas fa-sync-alt"></i> Atualizar
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body no-pad">
+                    <div id="schedules-sync-info" style="display:none;padding:8px 16px;font-size:0.8rem;background:var(--bg-tertiary);border-bottom:1px solid var(--border)"></div>
+                    <div id="schedules-timeline"></div>
+                    <table class="table" id="schedules-table">
+                        <thead>
+                            <tr>
+                                <th style="width:36px">#</th>
+                                <th>Vídeo</th>
+                                <th>Canal</th>
+                                <th>Agendado para</th>
+                                <th>Estado</th>
+                                <th style="width:120px">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="schedules-tbody">
+                        </tbody>
+                    </table>
+                    <div class="empty-state" id="schedules-empty" style="display:none">
+                        <i class="fas fa-calendar-times"></i>
+                        <p>Não há vídeos agendados</p>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -386,66 +513,56 @@
                 </div>
             </div>
 
-            <!-- Auto Manager Settings -->
+            <!-- Scheduled Publishing Settings -->
             <div class="card">
                 <div class="card-header">
-                    <h2><i class="fas fa-robot"></i> Gestão Automática</h2>
-                    <div class="status-indicator" id="auto-manager-status">
-                        <span class="status-dot offline"></span>
-                        <span>Desativado</span>
-                    </div>
+                    <h2><i class="fas fa-clock"></i> Agendamento Automático</h2>
                 </div>
                 <div class="card-body">
-                    <div class="info-box" style="margin-bottom: 1rem;">
-                        <i class="fas fa-magic"></i>
-                        <div>
-                            <strong>Modo Automático:</strong> O sistema limpará vídeos antigos automaticamente e baixará novos vídeos de uma playlist do YouTube para processar continuamente.
-                        </div>
-                    </div>
-                    
                     <div class="form-group">
                         <label class="checkbox-label">
-                            <input type="checkbox" id="auto-manager-enabled">
-                            <span>Ativar gestão automática</span>
+                            <input type="checkbox" id="setting-schedule-enabled">
+                            <span>Ativar agendamento automático de publicações</span>
                         </label>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>URL da Playlist do YouTube *</label>
-                        <div style="display:flex;gap:8px;align-items:center">
-                            <input type="url" id="auto-manager-playlist" class="form-control" placeholder="https://www.youtube.com/playlist?list=..." style="flex:1;width:auto;min-width:0">
-                            <button type="button" class="btn btn-sm btn-primary" onclick="testAutoManagerPlaylist()" title="Testar a URL da playlist" style="white-space:nowrap;flex-shrink:0">
-                                <i class="fas fa-check"></i> Testar
-                            </button>
-                        </div>
                         <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">
-                            Ex: Playlists de vídeos "satisfying", gameplay, cooking, etc.
+                            Quando ativo, os vídeos são publicados como privados e agendados para saírem em intervalos regulares.
                         </div>
                     </div>
-                    
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Limite de armazenamento (MB)</label>
-                            <input type="number" id="auto-manager-storage" class="form-control" min="1000" max="50000" value="5000" step="500">
+                            <label>Intervalo entre publicações (horas)</label>
+                            <input type="number" id="setting-schedule-interval" class="form-control" min="1" max="24" value="2" step="0.5">
                             <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">
-                                Quando atingir este limite, vídeos antigos serão removidos automaticamente
+                                Tempo entre a publicação de cada vídeo agendado.
                             </div>
                         </div>
                         <div class="form-group">
-                            <label>Intervalo de verificação (minutos)</label>
-                            <input type="number" id="auto-manager-interval" class="form-control" min="5" max="120" value="15">
+                            <label>Máximo de vídeos por sessão</label>
+                            <input type="number" id="setting-schedule-max-batch" class="form-control" min="1" max="20" value="5">
                             <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">
-                                Frequência de verificação para limpeza e novos vídeos
+                                Número máximo de vídeos a agendar de uma só vez.
                             </div>
                         </div>
                     </div>
-                    
-                    <button class="btn btn-primary" onclick="saveAutoManagerSettings()">
-                        <i class="fas fa-save"></i> Guardar e Ativar
+                    <div class="info-box">
+                        <i class="fas fa-info-circle"></i>
+                        <div>
+                            <strong>Como funciona:</strong>
+                            <ul>
+                                <li>O primeiro vídeo é agendado para daqui a 2 minutos</li>
+                                <li>Os seguintes são espaçados pelo intervalo definido (exemplo: 2 em 2 horas)</li>
+                                <li>Os vídeos ficam privados no YouTube até à hora agendada</li>
+                                <li>Perfeito para distribuir conteúdo ao longo do dia automaticamente</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" onclick="saveSettings()">
+                        <i class="fas fa-save"></i> Guardar Definições
                     </button>
                 </div>
             </div>
 
+            <!-- Auto Manager Settings -->
             <!-- YouTube Accounts -->
             <div class="card">
                 <div class="card-header">

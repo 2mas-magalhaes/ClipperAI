@@ -10,8 +10,10 @@ let followedChannelsData = [];
 let followedVideosData = [];
 let selectedFollowedId = null;
 let reviewData = [];
+let reviewSelectedIds = new Set();
 let postedData = [];
 let settingsData = {};
+let schedulesData = {};
 let workerRunning = false;
 let workerPaused = false;
 
@@ -59,14 +61,20 @@ function navigateTo(page) {
     refreshPage(page);
 }
 
-function refreshAll() {
-    fetchQueue();
-    fetchChannels();
-    fetchFollowedChannels();
-    fetchReview();
-    fetchPosted();
-    fetchSettings();
-    fetchWorkerStatus();
+async function refreshAll() {
+    // Load channels first (needed for dropdowns in other pages)
+    await fetchChannels();
+    
+    // Then load everything else in parallel
+    await Promise.all([
+        fetchQueue(),
+        fetchFollowedChannels(),
+        fetchReview(),
+        fetchPosted(),
+        fetchSettings(),
+        fetchWorkerStatus(),
+        fetchSchedules(),
+    ]);
 }
 
 function refreshPage(page) {
@@ -92,10 +100,18 @@ function refreshPage(page) {
             }
             break;
         case 'review':
-            fetchReview();
+            // Ensure channels are loaded for dropdowns
+            if (!channelsData || channelsData.length === 0) {
+                fetchChannels().then(() => fetchReview());
+            } else {
+                fetchReview();
+            }
             break;
         case 'posted':
             fetchPosted();
+            break;
+        case 'schedules':
+            fetchSchedules();
             break;
         case 'settings':
             fetchSettings();
@@ -463,6 +479,11 @@ async function editQueueChannel(id) {
     const item = queueData.find(q => q.id === id);
     if (!item) return;
     
+    // Ensure channels are loaded before showing modal
+    if (!channelsData || channelsData.length === 0) {
+        await fetchChannels();
+    }
+    
     // Create a simple dropdown menu
     const currentChannel = item.channel_id || settingsData.default_channel_id;
     const currentChannelName = getChannelName(currentChannel);
@@ -599,9 +620,14 @@ async function bulkQueueAction(action, params = {}) {
     }
 }
 
-function bulkSetChannel() {
+async function bulkSetChannel() {
     const ids = getSelectedQueueIds();
     if (ids.length === 0) return;
+
+    // Ensure channels are loaded before showing modal
+    if (!channelsData || channelsData.length === 0) {
+        await fetchChannels();
+    }
 
     const options = channelsData.map(ch => `
         <option value="${ch.id}">${esc(ch.name)}</option>
@@ -639,6 +665,72 @@ async function confirmBulkChannel(btn) {
     const channelId = document.getElementById('bulk-channel-select').value;
     btn.closest('.modal-overlay').remove();
     await bulkQueueAction('set_channel', { channel_id: channelId || null });
+}
+
+async function bulkInterlaceChannels() {
+    const ids = getSelectedQueueIds();
+    if (ids.length === 0) return;
+
+    // Ensure channels are loaded
+    if (!channelsData || channelsData.length === 0) {
+        await fetchChannels();
+    }
+
+    if (channelsData.length === 0) {
+        toast('Nenhum canal disponível', 'error');
+        return;
+    }
+
+    if (channelsData.length === 1) {
+        toast('Tens apenas 1 canal. Intercalar requer 2+ canais.', 'warning');
+        return;
+    }
+
+    // Show confirmation modal
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.innerHTML = `
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Intercalar Canais — ${ids.length} vídeo(s)</h3>
+                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p>Os vídeos selecionados serão distribuídos alternadamente entre os ${channelsData.length} canais:</p>
+                <ul style="margin:12px 0;padding-left:20px">
+                    ${channelsData.map((ch, i) => `<li><strong>${esc(ch.name)}</strong> (vídeos ${getInterlacePattern(i, channelsData.length, ids.length)})</li>`).join('')}
+                </ul>
+                <p style="margin-top:12px;color:var(--text-muted);font-size:0.9rem">
+                    <i class="fas fa-info-circle"></i> Ordem: Canal 1 → Canal 2 → ... → Canal ${channelsData.length} → Canal 1 ...
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+                <button class="btn btn-primary" onclick="confirmInterlaceChannels(this)">Aplicar</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+
+function getInterlacePattern(channelIndex, totalChannels, totalVideos) {
+    // Calculate which video numbers will get this channel (1-based)
+    const positions = [];
+    for (let i = channelIndex + 1; i <= totalVideos; i += totalChannels) {
+        positions.push(i);
+        if (positions.length >= 6) {  // Limit display to first 6
+            positions.push('...');
+            break;
+        }
+    }
+    return positions.join(', ');
+}
+
+async function confirmInterlaceChannels(btn) {
+    btn.closest('.modal-overlay').remove();
+    await bulkQueueAction('interlace_channels');
 }
 
 function bulkSetPrivacy() {
@@ -714,9 +806,17 @@ function renderReview() {
     if (!grid || !empty) return;
 
     const pending = (reviewData || []).filter(c => c.status === 'pending' || c.status === 'uploading');
+
+    // Keep only valid selected IDs from current pending list.
+    const currentPendingIds = new Set(pending.map(c => c.id));
+    for (const id of reviewSelectedIds) {
+        if (!currentPendingIds.has(id)) reviewSelectedIds.delete(id);
+    }
+
     if (pending.length === 0) {
         grid.innerHTML = '';
         empty.style.display = 'block';
+        updateReviewBulkBar();
         return;
     }
 
@@ -730,6 +830,8 @@ function renderReview() {
         const srcUrl   = clip.source_url  || '';
         const srcTitle = clip.source_title || 'Vídeo original';
         const srcChan  = clip.source_channel_name || '';
+        const isUploading = clip.status === 'uploading';
+        const isSelected = reviewSelectedIds.has(clip.id);
         // YouTube video ID → thumbnail
         let srcThumb = '';
         const vidMatch = srcUrl.match(/[?&]v=([A-Za-z0-9_-]{11})/);
@@ -749,13 +851,16 @@ function renderReview() {
             : '';
 
         return `
-        <div class="review-card ${clip.status === 'uploading' ? 'publishing' : ''}" data-clip-id="${clip.id}">
+        <div class="review-card ${isUploading ? 'publishing' : ''} ${isSelected ? 'review-card-selected' : ''}" data-clip-id="${clip.id}">
+            <label class="review-select-corner" title="Selecionar clip" onclick="event.stopPropagation()">
+                <input type="checkbox" class="review-select-cb" ${isSelected ? 'checked' : ''} ${isUploading ? 'disabled' : ''} onchange="toggleReviewSelect('${clip.id}', this.checked)">
+            </label>
             <video class="review-video" controls preload="metadata" src="${esc(clipUrl)}"></video>
             <div class="review-content">
                 <div class="review-title">${esc(youtubeTitle)}</div>
                 <div class="review-meta">
                     ${channelName ? `<span class="tag">${esc(channelName)}</span>` : '<span class="tag muted">Sem canal</span>'}
-                    ${clip.status === 'uploading' ? '<span class="tag uploading-tag"><i class="fas fa-spinner" style="animation:spin 1s linear infinite"></i> A publicar</span>' : ''}
+                    ${isUploading ? '<span class="tag uploading-tag"><i class="fas fa-spinner" style="animation:spin 1s linear infinite"></i> A publicar</span>' : ''}
                     ${clip.reason ? `<span class="text-muted">${esc(clip.reason)}</span>` : ''}
                 </div>
                 ${sourceBlock}
@@ -772,13 +877,13 @@ function renderReview() {
                 
                 <div class="form-group" style="margin-top:10px">
                     <label>Canal para publicar</label>
-                    <select class="form-control" onchange="setReviewChannel('${clip.id}', this.value)" ${clip.status === 'uploading' ? 'disabled' : ''}>
+                    <select class="form-control" onchange="setReviewChannel('${clip.id}', this.value)" ${isUploading ? 'disabled' : ''}>
                         <option value="">— Selecionar canal —</option>
                         ${channelsData.map(ch => `<option value="${ch.id}" ${clip.channel_id === ch.id ? 'selected' : ''}>${esc(ch.name)}</option>`).join('')}
                     </select>
                 </div>
                 <div class="review-actions">
-                    ${clip.status === 'uploading'
+                    ${isUploading
                         ? `<div class="publishing-indicator"><i class="fas fa-spinner" style="animation:spin 1s linear infinite"></i> A publicar no YouTube...</div>`
                         : `<button class="btn btn-success" onclick="publishReviewClip('${clip.id}')">
                             <i class="fas fa-upload"></i> Publicar
@@ -791,6 +896,208 @@ function renderReview() {
             </div>
         </div>`;
     }).join('');
+
+    updateReviewBulkBar();
+}
+
+function toggleReviewSelect(id, checked) {
+    if (checked) reviewSelectedIds.add(id);
+    else reviewSelectedIds.delete(id);
+
+    const card = document.querySelector(`.review-card[data-clip-id="${id}"]`);
+    if (card) card.classList.toggle('review-card-selected', checked);
+    updateReviewBulkBar();
+}
+
+function toggleSelectAllReview(checked) {
+    reviewSelectedIds.clear();
+    if (checked) {
+        for (const clip of (reviewData || [])) {
+            if (clip.status === 'pending') reviewSelectedIds.add(clip.id);
+        }
+    }
+    renderReview();
+}
+
+function getSelectedReviewIds() {
+    return Array.from(reviewSelectedIds);
+}
+
+function updateReviewBulkBar() {
+    const bar = document.getElementById('review-bulk-bar');
+    const countEl = document.getElementById('review-bulk-selected-count');
+    const selectAll = document.getElementById('review-select-all');
+    if (!bar || !countEl || !selectAll) return;
+
+    const pendingCount = (reviewData || []).filter(c => c.status === 'pending').length;
+    const selectedCount = reviewSelectedIds.size;
+
+    bar.style.display = pendingCount > 0 ? 'flex' : 'none';
+    countEl.textContent = selectedCount;
+
+    if (selectedCount === 0) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+    } else if (selectedCount === pendingCount) {
+        selectAll.checked = true;
+        selectAll.indeterminate = false;
+    } else {
+        selectAll.checked = false;
+        selectAll.indeterminate = true;
+    }
+}
+
+async function bulkReviewSetChannel() {
+    const ids = getSelectedReviewIds();
+    if (ids.length === 0) return;
+
+    if (!channelsData || channelsData.length === 0) await fetchChannels();
+    if (!channelsData || channelsData.length === 0) {
+        toast('Nenhum canal disponível', 'error');
+        return;
+    }
+
+    const options = channelsData.map(ch => `<option value="${ch.id}">${esc(ch.name)}</option>`).join('');
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.innerHTML = `
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Alterar Canal — ${ids.length} clip(s)</h3>
+                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Canal de Publicação</label>
+                    <select id="bulk-review-channel-select" class="form-control">
+                        <option value="">— Selecionar canal —</option>
+                        ${options}
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+                <button class="btn btn-primary" onclick="confirmBulkReviewSetChannel(this)">Aplicar</button>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+}
+
+async function confirmBulkReviewSetChannel(btn) {
+    const channelId = document.getElementById('bulk-review-channel-select').value;
+    if (!channelId) {
+        toast('Seleciona um canal', 'warning');
+        return;
+    }
+    btn.closest('.modal-overlay').remove();
+
+    const ids = getSelectedReviewIds();
+    for (const clipId of ids) {
+        await api(`/api/review/${clipId}`, 'PATCH', { channel_id: channelId });
+    }
+    toast(`Canal aplicado a ${ids.length} clip(s)`, 'success');
+    await fetchReview();
+}
+
+async function bulkReviewInterlaceChannels() {
+    const ids = getSelectedReviewIds();
+    if (ids.length === 0) return;
+
+    if (!channelsData || channelsData.length === 0) await fetchChannels();
+    if (!channelsData || channelsData.length < 2) {
+        toast('Intercalar requer pelo menos 2 canais', 'warning');
+        return;
+    }
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.innerHTML = `
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Intercalar Canais — ${ids.length} clip(s)</h3>
+                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <p>Os clips selecionados vão ser distribuídos alternadamente pelos canais:</p>
+                <ul style="margin:10px 0 0 18px;line-height:1.5">
+                    ${channelsData.map(ch => `<li>${esc(ch.name)}</li>`).join('')}
+                </ul>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+                <button class="btn btn-primary" onclick="confirmBulkReviewInterlace(this)">Aplicar</button>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+}
+
+async function confirmBulkReviewInterlace(btn) {
+    btn.closest('.modal-overlay').remove();
+    const ids = getSelectedReviewIds();
+    if (ids.length === 0) return;
+
+    // Keep visual order from current pending list.
+    const ordered = (reviewData || []).filter(c => ids.includes(c.id) && c.status === 'pending');
+    for (let i = 0; i < ordered.length; i++) {
+        const clip = ordered[i];
+        const channel = channelsData[i % channelsData.length];
+        await api(`/api/review/${clip.id}`, 'PATCH', { channel_id: channel.id });
+    }
+
+    toast(`Intercalado por ${channelsData.length} canais`, 'success');
+    await fetchReview();
+}
+
+async function bulkRejectReviewClips() {
+    const ids = getSelectedReviewIds();
+    if (ids.length === 0) return;
+    if (!confirm(`Rejeitar ${ids.length} clip(s) selecionados?`)) return;
+
+    let rejected = 0;
+    let failed = 0;
+    for (const id of ids) {
+        try {
+            await api(`/api/review/${id}`, 'DELETE');
+            rejected += 1;
+        } catch (_) {
+            failed += 1;
+        }
+    }
+
+    reviewSelectedIds.clear();
+    await fetchReview();
+    toast(`Rejeitados: ${rejected}${failed ? `, falhas: ${failed}` : ''}`, failed ? 'warning' : 'success');
+}
+
+async function bulkPublishReviewClips() {
+    const ids = getSelectedReviewIds();
+    if (ids.length === 0) return;
+    if (!confirm(`Publicar ${ids.length} clip(s) selecionados?`)) return;
+
+    let success = 0;
+    let failed = 0;
+
+    for (const id of ids) {
+        const clip = reviewData.find(c => c.id === id);
+        if (!clip || clip.status !== 'pending') continue;
+
+        const card = document.querySelector(`.review-card[data-clip-id="${id}"]`);
+        if (card) card.classList.add('publishing');
+
+        try {
+            const result = await api(`/api/review/${id}/publish`, 'POST', { channel_id: clip.channel_id || null });
+            if (result && result.success) success += 1;
+            else failed += 1;
+        } catch (_) {
+            failed += 1;
+        }
+    }
+
+    reviewSelectedIds.clear();
+    await fetchReview();
+    await fetchPosted();
+    await fetchChannels();
+    toast(`Publicados: ${success}${failed ? `, falhas: ${failed}` : ''}`, failed ? 'warning' : 'success');
 }
 
 function updateReviewBadge() {
@@ -816,6 +1123,18 @@ async function publishReviewClip(clipId) {
     const clip = reviewData.find(c => c.id === clipId);
     if (!clip) return;
 
+    // Ler o canal diretamente do dropdown (fonte de verdade) em vez de depender de reviewData
+    const card = document.querySelector(`.review-card[data-clip-id="${clipId}"]`);
+    const channelSelect = card ? card.querySelector('select.form-control') : null;
+    const selectedChannelId = channelSelect ? channelSelect.value : (clip.channel_id || null);
+    
+    // Atualizar reviewData e BD se o dropdown tiver valor diferente
+    if (selectedChannelId !== (clip.channel_id || '')) {
+        clip.channel_id = selectedChannelId || null;
+        // Guardar no servidor sem bloquear
+        api(`/api/review/${clipId}`, 'PATCH', { channel_id: selectedChannelId || null });
+    }
+
     // Abre modal de publicação com logs
     openPublishLogModal(clip);
 
@@ -829,7 +1148,6 @@ async function publishReviewClip(clipId) {
     if (btn) btn.disabled = true;
 
     // Marcar card como "a publicar"
-    const card = document.querySelector(`.review-card[data-clip-id="${clipId}"]`);
     if (card) {
         card.classList.add('publishing');
         const actionsEl = card.querySelector('.review-actions');
@@ -843,7 +1161,7 @@ async function publishReviewClip(clipId) {
     }
 
     try {
-        const result = await api(`/api/review/${clipId}/publish`, 'POST', { channel_id: clip.channel_id || null });
+        const result = await api(`/api/review/${clipId}/publish`, 'POST', { channel_id: selectedChannelId || null });
         const logs = result.logs || [];
 
         if (logsEl) {
@@ -1064,6 +1382,11 @@ async function fetchChannels() {
     channelsData = await api('/api/channels');
     renderChannels();
     populateChannelSelects();
+    
+    // Re-render review if it's the current page (to update channel dropdowns)
+    if (currentPage === 'review') {
+        renderReview();
+    }
 }
 
 function renderChannels() {
@@ -2242,7 +2565,6 @@ async function deletePostedVideo(id) {
 async function fetchSettings() {
     settingsData = await api('/api/settings');
     renderSettings();
-    fetchAutoManagerConfig();
     // Inicia o countdown do scan automático quando as definições são carregadas
     if (!scanCountdownInterval && currentPage === 'followed') {
         initScanCountdown();
@@ -2257,6 +2579,11 @@ function renderSettings() {
     document.getElementById('setting-clip-max').value = settingsData.clip_duration_max || 60;
     document.getElementById('setting-max-video-duration').value = settingsData.max_video_duration_min || 60;
     document.getElementById('setting-auto-publish').checked = settingsData.auto_publish || false;
+
+    // Scheduled publishing settings
+    document.getElementById('setting-schedule-enabled').checked = settingsData.schedule_enabled !== false; // default true
+    document.getElementById('setting-schedule-interval').value = settingsData.schedule_interval_hours || 2;
+    document.getElementById('setting-schedule-max-batch').value = settingsData.schedule_max_per_batch || 5;
 
     // Default channel
     const sel = document.getElementById('setting-default-channel');
@@ -2274,98 +2601,13 @@ async function saveSettings() {
         max_video_duration_min: parseInt(document.getElementById('setting-max-video-duration').value) || 60,
         auto_publish: document.getElementById('setting-auto-publish').checked,
         default_channel_id: document.getElementById('setting-default-channel').value || null,
+        schedule_enabled: document.getElementById('setting-schedule-enabled').checked,
+        schedule_interval_hours: parseFloat(document.getElementById('setting-schedule-interval').value) || 2,
+        schedule_max_per_batch: parseInt(document.getElementById('setting-schedule-max-batch').value) || 5,
     };
     await api('/api/settings', 'PATCH', data);
     toast('Definições guardadas!', 'success');
 }
-
-// ═══════════════════════════════════════════════
-//  AUTO MANAGER
-// ═══════════════════════════════════════════════
-
-async function fetchAutoManagerConfig() {
-    const data = await api('/api/auto-manager/config');
-    document.getElementById('auto-manager-enabled').checked = data.enabled || false;
-    document.getElementById('auto-manager-playlist').value = data.playlist_url || '';
-    document.getElementById('auto-manager-storage').value = data.max_storage_mb || 5000;
-    document.getElementById('auto-manager-interval').value = data.check_interval_minutes || 15;
-    renderAutoManagerStatus();
-}
-
-async function testAutoManagerPlaylist() {
-    const playlist_url = document.getElementById('auto-manager-playlist').value.trim();
-    
-    if (!playlist_url) {
-        toast('Por favor, insira a URL da playlist', 'error');
-        return;
-    }
-    
-    try {
-        const btn = event.target.closest('button');
-        const originalContent = btn.innerHTML;
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> A testar...';
-        
-        const result = await api('/api/auto-manager/test-playlist', 'POST', { playlist_url });
-        
-        if (result.ok) {
-            toast('✅ Playlist válida! ' + (result.message || ''), 'success');
-        } else {
-            toast('❌ Erro: ' + (result.error || 'Playlist inválida'), 'error');
-        }
-        
-        btn.innerHTML = originalContent;
-        btn.disabled = false;
-    } catch (e) {
-        toast('Erro ao testar: ' + (e?.message || e), 'error');
-        const btn = event.target.closest('button');
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-check"></i> Testar';
-    }
-}
-
-async function saveAutoManagerSettings() {
-    try {
-        const enabled = document.getElementById('auto-manager-enabled').checked;
-        const playlist_url = document.getElementById('auto-manager-playlist').value.trim();
-
-        if (enabled && !playlist_url) {
-            toast('Por favor, insira a URL da playlist', 'error');
-            return;
-        }
-
-        const data = {
-            enabled: enabled,
-            playlist_url: playlist_url,
-            max_storage_mb: parseInt(document.getElementById('auto-manager-storage').value) || 5000,
-            check_interval_minutes: parseInt(document.getElementById('auto-manager-interval').value) || 15
-        };
-
-        const result = await api('/api/auto-manager/config', 'POST', data);
-
-        if (result.ok) {
-            toast(result.message || 'AutoManager atualizado', 'success');
-            await fetchAutoManagerConfig();
-            await renderAutoManagerStatus();
-        } else {
-            toast('Erro ao configurar AutoManager: ' + (result.error || 'erro desconhecido'), 'error');
-        }
-    } catch (e) {
-        toast('Erro ao guardar AutoManager: ' + (e?.message || e), 'error');
-    }
-}
-
-async function renderAutoManagerStatus() {
-    const status = await api('/api/auto-manager/status');
-    const indicator = document.getElementById('auto-manager-status');
-    
-    if (status.running) {
-        indicator.innerHTML = '<span class="status-dot online"></span><span>Ativo</span>';
-    } else {
-        indicator.innerHTML = '<span class="status-dot offline"></span><span>Desativado</span>';
-    }
-}
-
 
 // ═══════════════════════════════════════════════
 //  WORKER
@@ -2698,6 +2940,328 @@ function switchAddVideoTab(tab) {
         fileBtn.style.borderBottomColor = 'var(--primary)';
         fileBtn.style.color = 'var(--primary)';
     }
+}
+
+// ═══════════════════════════════════════════════
+//  SCHEDULES (Rever Agendamentos)
+// ═══════════════════════════════════════════════
+
+async function fetchSchedules() {
+    schedulesData = await api('/api/schedules');
+    renderSchedules();
+    updateSchedulesBadge();
+    renderScheduleConfig();
+}
+
+async function syncSchedulesFromYouTube(btn) {
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> A sincronizar...'; }
+    const infoEl = document.getElementById('schedules-sync-info');
+    try {
+        // 1. Sync posted videos data from YouTube (pulls real status)
+        const syncResult = await api('/api/posted/sync', 'POST');
+        // 2. Push local schedule changes to YouTube
+        const pushResult = await api('/api/schedules/sync-youtube', 'POST');
+        // 3. Refresh schedule data
+        schedulesData = await api('/api/schedules');
+        renderSchedules();
+        updateSchedulesBadge();
+        
+        let msg = '<i class="fas fa-check-circle" style="color:var(--green)"></i> ';
+        const parts = [];
+        if (syncResult.synced !== undefined) parts.push(`${syncResult.synced} vídeos atualizados do YouTube`);
+        if (pushResult.youtube_updated !== undefined && pushResult.youtube_updated > 0) parts.push(`${pushResult.youtube_updated} agendamentos enviados para YouTube`);
+        if (pushResult.youtube_errors && pushResult.youtube_errors.length > 0) {
+            parts.push(`<span style="color:var(--red)">${pushResult.youtube_errors.length} erros</span>`);
+        }
+        msg += parts.length ? parts.join(' · ') : 'Sincronização concluída';
+        if (infoEl) { infoEl.innerHTML = msg; infoEl.style.display = 'block'; }
+        toast('Sincronizado com YouTube!', 'success');
+    } catch (e) {
+        if (infoEl) { infoEl.innerHTML = `<i class="fas fa-exclamation-circle" style="color:var(--red)"></i> Erro: ${e.message || e}`; infoEl.style.display = 'block'; }
+        toast('Erro ao sincronizar com YouTube', 'error');
+    }
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fab fa-youtube"></i> Sincronizar com YouTube'; }
+}
+
+function updateSchedulesBadge() {
+    const badge = document.getElementById('schedules-badge');
+    if (!badge) return;
+    const now = new Date();
+    let count = 0;
+    
+    // Count future scheduled videos
+    if (schedulesData.scheduled_videos) {
+        count += schedulesData.scheduled_videos.filter(v => {
+            const pubAt = v.youtube_publish_at;
+            if (!pubAt) return false;
+            const pubTime = new Date(pubAt);
+            const ytPrivacy = v.youtube_privacy || '';
+            // Count scheduled (future) + missed (past but still private)
+            if (pubTime > now) return true;
+            if (ytPrivacy === 'private' && pubTime <= now) return true;
+            return false;
+        }).length;
+    }
+    
+    // Count future slots
+    if (schedulesData.scheduled_slots) {
+        for (const ch of Object.values(schedulesData.scheduled_slots)) {
+            for (const ts of ch) {
+                if (new Date(ts) > now) count++;
+            }
+        }
+    }
+    
+    badge.textContent = count || '';
+}
+
+function renderScheduleConfig() {
+    if (!schedulesData) return;
+    
+    const intervalEl = document.getElementById('sched-interval-hours');
+    const perDayEl = document.getElementById('sched-videos-per-day');
+    const startEl = document.getElementById('sched-start-time');
+    const endEl = document.getElementById('sched-end-time');
+    
+    if (intervalEl) intervalEl.value = schedulesData.schedule_interval_hours || 2;
+    if (perDayEl) perDayEl.value = schedulesData.schedule_videos_per_day || 12;
+    if (startEl) startEl.value = schedulesData.schedule_start_time || '08:00';
+    if (endEl) endEl.value = schedulesData.schedule_end_time || '22:00';
+    
+    // Populate channel filter
+    const sel = document.getElementById('sched-filter-channel');
+    if (sel && channelsData) {
+        const currentVal = sel.value;
+        sel.innerHTML = '<option value="">— Todos os canais —</option>';
+        channelsData.forEach(ch => {
+            sel.innerHTML += `<option value="${esc(ch.id)}">${esc(ch.name)}</option>`;
+        });
+        sel.value = currentVal;
+    }
+}
+
+function renderSchedules() {
+    const tbody = document.getElementById('schedules-tbody');
+    const empty = document.getElementById('schedules-empty');
+    const timeline = document.getElementById('schedules-timeline');
+    
+    if (!schedulesData) return;
+    
+    const now = new Date();
+    
+    // Combine scheduled videos and future slots into one list
+    let allItems = [];
+    
+    // Add posted videos with publish_at
+    if (schedulesData.scheduled_videos) {
+        for (const v of schedulesData.scheduled_videos) {
+            const pubAt = v.youtube_publish_at;
+            if (!pubAt) continue;
+            
+            // Determine status from actual YouTube data when available
+            const pubTime = new Date(pubAt);
+            const ytPrivacy = v.youtube_privacy || '';
+            let videoStatus;
+            if (ytPrivacy === 'public') {
+                videoStatus = 'published';
+            } else if (pubTime > now) {
+                videoStatus = 'scheduled';
+            } else if (ytPrivacy === 'private' && pubTime <= now) {
+                // Past the publish time but still private — might have failed to publish
+                videoStatus = 'missed';
+            } else {
+                videoStatus = 'published';
+            }
+            
+            allItems.push({
+                type: 'video',
+                time: pubTime,
+                title: v.youtube_title || v.title || 'Clip',
+                channel_id: v.channel_id,
+                youtube_url: v.youtube_url || '',
+                video_id: v.id,
+                youtube_video_id: v.youtube_video_id || '',
+                privacy: ytPrivacy || 'private',
+                status: videoStatus,
+            });
+        }
+    }
+    
+    // Add reserved slots
+    if (schedulesData.scheduled_slots) {
+        for (const [chId, slots] of Object.entries(schedulesData.scheduled_slots)) {
+            for (const ts of slots) {
+                const dt = new Date(ts);
+                // Skip slots that already have a matching video
+                // Use wider tolerance (5 min) to handle timezone offset inconsistencies
+                const hasVideo = allItems.some(item => 
+                    item.type === 'video' && 
+                    item.channel_id === chId &&
+                    Math.abs(item.time.getTime() - dt.getTime()) < 300000
+                );
+                if (!hasVideo) {
+                    allItems.push({
+                        type: 'slot',
+                        time: dt,
+                        title: 'Slot reservado',
+                        channel_id: chId,
+                        youtube_url: '',
+                        video_id: null,
+                        youtube_video_id: '',
+                        privacy: 'private',
+                        status: dt > now ? 'scheduled' : 'past',
+                    });
+                }
+            }
+        }
+    }
+    
+    // Sort by time
+    allItems.sort((a, b) => a.time - b.time);
+    
+    // Filter by channel if selected
+    const filterChannel = document.getElementById('sched-filter-channel')?.value;
+    if (filterChannel) {
+        allItems = allItems.filter(item => item.channel_id === filterChannel);
+    }
+    
+    if (allItems.length === 0) {
+        tbody.innerHTML = '';
+        empty.style.display = 'block';
+        timeline.innerHTML = '';
+        return;
+    }
+    
+    empty.style.display = 'none';
+    
+    // Build timeline (group by day)
+    const byDay = {};
+    for (const item of allItems) {
+        const dayKey = item.time.toLocaleDateString('pt-PT', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+        if (!byDay[dayKey]) byDay[dayKey] = [];
+        byDay[dayKey].push(item);
+    }
+    
+    let timelineHtml = '';
+    for (const [day, items] of Object.entries(byDay)) {
+        const futureCount = items.filter(i => i.time > now).length;
+        timelineHtml += `<div class="sched-timeline-day">
+            <div class="sched-day-header">
+                <i class="fas fa-calendar-day"></i> ${esc(day)}
+                <span class="day-count">${items.length} vídeo${items.length !== 1 ? 's' : ''}${futureCount > 0 ? ` (${futureCount} pendente${futureCount !== 1 ? 's' : ''})` : ''}</span>
+            </div>
+            <div class="sched-day-slots">
+                ${items.map(item => {
+                    const isFuture = item.time > now;
+                    const timeStr = item.time.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+                    const icon = item.type === 'video' ? 'fas fa-video' : 'fas fa-clock';
+                    return `<span class="sched-slot ${isFuture ? 'future' : 'past'}" title="${esc(item.title)}">
+                        <i class="${icon}"></i> ${timeStr}
+                    </span>`;
+                }).join('')}
+            </div>
+        </div>`;
+    }
+    timeline.innerHTML = timelineHtml;
+    
+    // Build table
+    tbody.innerHTML = allItems.map((item, idx) => {
+        const isFuture = item.time > now;
+        const channelName = getChannelName(item.channel_id);
+        const timeStr = item.time.toLocaleString('pt-PT', { 
+            day: '2-digit', month: 'short', year: 'numeric', 
+            hour: '2-digit', minute: '2-digit' 
+        });
+        
+        const statusBadge = item.status === 'scheduled' 
+            ? '<span class="sched-status-badge scheduled"><i class="fas fa-clock"></i> Agendado</span>'
+            : item.status === 'published'
+            ? '<span class="sched-status-badge published"><i class="fas fa-check"></i> Publicado</span>'
+            : item.status === 'missed'
+            ? '<span class="sched-status-badge" style="background:var(--red);color:#fff"><i class="fas fa-exclamation-triangle"></i> Não publicou</span>'
+            : '<span class="sched-status-badge past"><i class="fas fa-history"></i> Passado</span>';
+        
+        const privacyIcon = item.privacy === 'public' ? '<i class="fas fa-globe" title="Público" style="color:var(--green);margin-left:6px"></i>'
+            : item.privacy === 'unlisted' ? '<i class="fas fa-eye-slash" title="Não listado" style="color:var(--orange);margin-left:6px"></i>'
+            : item.privacy === 'private' ? '<i class="fas fa-lock" title="Privado" style="color:var(--text-muted);margin-left:6px"></i>' : '';
+        
+        const titleHtml = item.youtube_url 
+            ? `<a href="${esc(item.youtube_url)}" target="_blank">${esc(item.title)}</a>`
+            : esc(item.title);
+        
+        const typeIcon = item.type === 'video' 
+            ? '<i class="fas fa-video" style="color:var(--accent)" title="Vídeo publicado"></i>'
+            : '<i class="fas fa-clock" style="color:var(--text-muted)" title="Slot reservado"></i>';
+        
+        return `<tr>
+            <td>${idx + 1}</td>
+            <td><div class="sched-video-title">${typeIcon} ${titleHtml}${privacyIcon}</div></td>
+            <td>${esc(channelName)}</td>
+            <td><span class="${isFuture ? 'sched-time' : 'sched-time-past'}">${timeStr}</span></td>
+            <td>${statusBadge}</td>
+            <td class="sched-actions">
+                ${item.youtube_url ? `<a href="${esc(item.youtube_url)}" target="_blank" class="btn btn-icon btn-sm" title="Ver no YouTube"><i class="fab fa-youtube" style="color:var(--red)"></i></a>` : ''}
+                ${item.video_id ? `<button class="btn btn-icon btn-sm" onclick="removeScheduledVideo('${esc(item.video_id)}')" title="Remover">
+                    <i class="fas fa-trash"></i>
+                </button>` : ''}
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+async function saveScheduleConfig() {
+    const data = {
+        schedule_interval_hours: parseFloat(document.getElementById('sched-interval-hours').value) || 2,
+        schedule_videos_per_day: parseInt(document.getElementById('sched-videos-per-day').value) || 12,
+        schedule_start_time: document.getElementById('sched-start-time').value || '08:00',
+        schedule_end_time: document.getElementById('sched-end-time').value || '22:00',
+    };
+    await api('/api/schedules/config', 'PATCH', data);
+    toast('Configuração de agendamento guardada!', 'success');
+    fetchSchedules();
+}
+
+async function rearrangeSchedules() {
+    const channelId = document.getElementById('sched-filter-channel')?.value || null;
+    const data = {
+        channel_id: channelId,
+        interval_hours: parseFloat(document.getElementById('sched-interval-hours').value) || 2,
+        videos_per_day: parseInt(document.getElementById('sched-videos-per-day').value) || 12,
+        start_time: document.getElementById('sched-start-time').value || '08:00',
+        end_time: document.getElementById('sched-end-time').value || '22:00',
+    };
+    
+    schedulesData = await api('/api/schedules/rearrange', 'POST', data);
+    renderSchedules();
+    updateSchedulesBadge();
+    
+    // Show YouTube sync feedback
+    const infoEl = document.getElementById('schedules-sync-info');
+    const ytUpdated = schedulesData.youtube_updated || 0;
+    const ytErrors = schedulesData.youtube_errors || [];
+    if (ytUpdated > 0 || ytErrors.length > 0) {
+        let msg = '<i class="fas fa-info-circle" style="color:var(--blue)"></i> ';
+        if (ytUpdated > 0) msg += `${ytUpdated} vídeos reagendados no YouTube`;
+        if (ytErrors.length > 0) msg += ` · <span style="color:var(--red)">${ytErrors.length} erros: ${esc(ytErrors[0])}</span>`;
+        if (infoEl) { infoEl.innerHTML = msg; infoEl.style.display = 'block'; }
+    }
+    toast('Agendamentos reorganizados!', 'success');
+}
+
+async function clearAllSchedules() {
+    if (!confirm('Tens a certeza que queres limpar todos os agendamentos futuros?')) return;
+    
+    const channelId = document.getElementById('sched-filter-channel')?.value || null;
+    await api('/api/schedules/clear', 'POST', { channel_id: channelId });
+    toast('Agendamentos limpos!', 'success');
+    fetchSchedules();
+}
+
+async function removeScheduledVideo(videoId) {
+    if (!confirm('Remover este vídeo dos agendados?')) return;
+    await api(`/api/posted/${videoId}`, 'PATCH', { youtube_publish_at: '' });
+    toast('Agendamento removido', 'success');
+    fetchSchedules();
 }
 
 // ═══════════════════════════════════════════════

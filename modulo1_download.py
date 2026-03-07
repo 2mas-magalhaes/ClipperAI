@@ -5,6 +5,8 @@ import glob
 import logging
 import time as _time
 import requests as _requests
+import io
+import sys
 
 try:
     from proxy_rotator import get_proxy, remove_bad_proxy, apply_proxy_to_opts, refresh_proxies
@@ -22,6 +24,32 @@ try:
     _HAS_PYTUBE = True
 except ImportError:
     _HAS_PYTUBE = False
+
+# Desabilitar logs verbose do yt-dlp
+logging.getLogger('yt_dlp').setLevel(logging.CRITICAL)
+logging.getLogger('yt_dlp.utils').setLevel(logging.CRITICAL)
+logging.getLogger('yt_dlp.extractor.youtube').setLevel(logging.CRITICAL)
+
+
+class _SuppressedYDLLogger:
+    """Logger para yt-dlp que suprime erros repetidos de bot-detection."""
+    
+    def debug(self, msg):
+        pass  # Ignorar debug
+    
+    def info(self, msg):
+        pass  # Ignorar info
+    
+    def warning(self, msg):
+        pass  # Ignorar warnings
+    
+    def error(self, msg):
+        """Ignorar completamente erros de bot-detection."""
+        # Se é um erro de autenticação/bot, silenciar
+        if any(x in msg.lower() for x in ['bot', 'sign in', 'authentication', 'cookies', 'age']):
+            return  # Silenciar completamente
+        # Outros erros - logar
+        logging.warning(f"[yt-dlp] {msg[:120]}")
 
 
 def _make_progress_hook(external_callback=None):
@@ -124,6 +152,7 @@ def _max_altura_disponivel(url_video, ydl_opts):
         opts_info['skip_download'] = True
         opts_info['quiet'] = True
         opts_info['no_warnings'] = True
+        opts_info['logger'] = _SuppressedYDLLogger()  # ✅ Suprimir logs repetidos
         with yt_dlp.YoutubeDL(opts_info) as ydl:
             info = ydl.extract_info(url_video, download=False)
         formatos = info.get('formats', []) if info else []
@@ -539,17 +568,20 @@ def baixar_video_youtube(url_do_video, nome_arquivo="video_original", progress_c
 
     # 1. Sem cookies primeiro (mais rápido e funciona na maioria dos casos)
     opts_sem_cookies = dict(ydl_opts_base)
+    opts_sem_cookies['logger'] = _SuppressedYDLLogger()  # ✅ Suprimir logs repetidos
     tentativas.append(("sem cookies", opts_sem_cookies))
 
     # 2. Firefox + cookies + User-Agent (recomendado para Cloudflare)
     opts_firefox = dict(ydl_opts_base)
     opts_firefox['cookiesfrombrowser'] = ('firefox',)
     opts_firefox['http_headers'] = {'User-Agent': UA_FIREFOX}
+    opts_firefox['logger'] = _SuppressedYDLLogger()  # ✅ Suprimir logs repetidos
     tentativas.append(("Firefox + cookies", opts_firefox))
 
     # 3. Android client (bypass age-gate e algumas restrições)
     opts_android = dict(ydl_opts_base)
     opts_android['extractor_args'] = {'youtube': {'player_client': ['android']}}
+    opts_android['logger'] = _SuppressedYDLLogger()  # ✅ Suprimir logs repetidos
     tentativas.append(("Android client", opts_android))
 
     ultimo_erro = None
@@ -627,6 +659,7 @@ def baixar_video_youtube(url_do_video, nome_arquivo="video_original", progress_c
                 opts_proxy['retries'] = 3
                 # Adicionar User-Agent para melhor compatibilidade
                 opts_proxy['http_headers'] = {'User-Agent': UA_CHROME}
+                opts_proxy['logger'] = _SuppressedYDLLogger()  # ✅ Suprimir logs repetidos
 
                 # Download direto (sem pré-verificação de resolução para não gastar proxy)
                 with yt_dlp.YoutubeDL(opts_proxy) as ydl:
@@ -716,6 +749,7 @@ def baixar_playlist_satisfatoria(url_playlist, n_videos=5, pasta_destino="downlo
         'playlistend': 200,   # limita a 200 entradas para ser rápido
         'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
         'socket_timeout': 30,
+        'logger': _SuppressedYDLLogger(),  # ✅ Suprimir logs repetidos
     }
 
     entradas = []
@@ -808,6 +842,7 @@ def baixar_playlist_satisfatoria(url_playlist, n_videos=5, pasta_destino="downlo
         for desc_t, opts_t in tentativas_sat:
             try:
                 _limpar_parciais(caminho)
+                opts_t['logger'] = _SuppressedYDLLogger()  # ✅ Suprimir logs repetidos
                 with yt_dlp.YoutubeDL(opts_t) as ydl:
                     ydl.download([url_vid])
                 valido, detalhe = _validar_video(caminho)
