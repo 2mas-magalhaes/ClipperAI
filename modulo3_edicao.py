@@ -1891,6 +1891,7 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
 
     for i, clipe in enumerate(clipes, 1):
         titulo = clipe.get('titulo') or clipe.get('title', f'Clipe {i}')
+        razao = clipe.get('razao', 'Clipe viral interessante')
         print(f"\n{'='*55}")
         print(f"📹 Editando clipe {i}/{total_clipes}: {titulo}")
         print(f"{'='*55}")
@@ -2184,7 +2185,9 @@ def editar_clipes(caminho_video, clipes, segmentos_whisper, pasta_saida="downloa
         if progress_callback:
             progress_callback(i, total_clipes, 90, "Loop infinito")
         
-        sucesso_loop = aplicar_loop_infinito(caminho_com_intervencoes, caminho_final, duracao_clip)
+        # Obter duração REAL do vídeo final (pode incluir intro + intervenções)
+        duracao_real = obter_duracao_video(caminho_com_intervencoes) or duracao_clip
+        sucesso_loop = aplicar_loop_infinito(caminho_com_intervencoes, caminho_final, duracao_real)
         if not sucesso_loop:
             print(f"  ⚠️ Loop infinito falhou, usando versão sem loop")
             shutil.copy2(caminho_com_intervencoes, caminho_final)

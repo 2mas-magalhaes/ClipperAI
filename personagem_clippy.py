@@ -99,8 +99,8 @@ CORES = {
 
 def _desenhar_corpo_clippy(draw, cx, cy, escala=1.0):
     """
-    Desenha o corpo principal do clipe de papel (forma de U duplo).
-    cx, cy = centro do corpo.
+    Desenha o corpo como clipe de papel autêntico — um arame metálico
+    contínuo com loop exterior, ponte de ligação, e loop interior.
     """
     s = escala
     borda = CORES['corpo_borda']
@@ -108,205 +108,219 @@ def _desenhar_corpo_clippy(draw, cx, cy, escala=1.0):
     highlight = CORES['corpo_highlight']
     sombra = CORES['corpo_sombra']
 
-    # Corpo exterior (U grande)
-    espessura = int(28 * s)
-    raio_ext = int(55 * s)
-    largura_corpo = int(120 * s)
-    altura_corpo = int(280 * s)
+    wire = int(22 * s)
+    wire_in = int(16 * s)
 
-    x1 = cx - largura_corpo // 2
-    y1 = cy - altura_corpo // 2
-    x2 = cx + largura_corpo // 2
-    y2 = cy + altura_corpo // 2
+    # Loop exterior
+    out_w = int(130 * s)
+    out_h = int(280 * s)
+    out_r = int(55 * s)
 
-    # Volta exterior
-    for offset in range(espessura):
-        t = offset / max(espessura - 1, 1)
-        if t < 0.3:
-            cor = sombra
-        elif t < 0.7:
-            cor = principal
+    ox1, oy1 = cx - out_w // 2, cy - out_h // 2
+    ox2, oy2 = cx + out_w // 2, cy + out_h // 2
+
+    # Loop interior (começa perto do topo, mais curto que o exterior)
+    in_margin = int(34 * s)
+    in_w = out_w - 2 * in_margin
+    in_top_gap = int(16 * s)
+    in_h = int(180 * s)
+    in_r = int(25 * s)
+
+    ix1, iy1 = cx - in_w // 2, oy1 + in_top_gap
+    ix2, iy2 = cx + in_w // 2, iy1 + in_h
+
+    def _metal_rect(x1, y1, x2, y2, radius, thick):
+        """Retângulo arredondado com gradiente metálico."""
+        for i in range(thick):
+            t = i / max(thick - 1, 1)
+            if t < 0.08:
+                c = borda
+            elif t < 0.28:
+                c = sombra
+            elif t < 0.55:
+                c = principal
+            elif t < 0.82:
+                c = highlight
+            else:
+                c = borda
+            r = max(2, radius - i)
+            draw.rounded_rectangle(
+                [x1 + i, y1 + i, x2 - i, y2 - i],
+                radius=r, outline=c, width=2)
+
+    # 1. Loop exterior
+    _metal_rect(ox1, oy1, ox2, oy2, out_r, wire)
+
+    # 2. Loop interior
+    _metal_rect(ix1, iy1, ix2, iy2, in_r, wire_in)
+
+    # 3. Ponte topo-direito (liga os dois loops como um arame contínuo)
+    br_y = iy1 + int(6 * s)
+    br_h = wire
+    br_x1 = ix2 - wire_in // 2 - int(2 * s)
+    br_x2 = ox2 - wire // 2 + int(2 * s)
+    for i in range(br_h):
+        t = i / max(br_h - 1, 1)
+        if t < 0.08:
+            c = borda
+        elif t < 0.28:
+            c = sombra
+        elif t < 0.55:
+            c = principal
+        elif t < 0.82:
+            c = highlight
         else:
-            cor = highlight
-        if offset == 0 or offset == espessura - 1:
-            cor = borda
-        draw.rounded_rectangle(
-            [x1 + offset, y1 + offset, x2 - offset, y2 - offset],
-            radius=raio_ext,
-            outline=cor,
-            width=2
-        )
+            c = borda
+        draw.line([(br_x1, br_y + i), (br_x2, br_y + i)], fill=c, width=1)
+    # Bordas superior/inferior da ponte
+    draw.line([(br_x1, br_y), (br_x2, br_y)],
+              fill=borda, width=int(2 * s))
+    draw.line([(br_x1, br_y + br_h - 1), (br_x2, br_y + br_h - 1)],
+              fill=borda, width=int(2 * s))
 
-    # Volta interior (mais pequena, dá aspeto de clipe)
-    margem_int = int(35 * s)
-    raio_int = int(40 * s)
-    alt_int = int(220 * s)
-    x1i = cx - largura_corpo // 2 + margem_int
-    y1i = cy - altura_corpo // 2 + int(60 * s)
-    x2i = cx + largura_corpo // 2 - margem_int
-    y2i = y1i + alt_int
-
-    esp_int = int(18 * s)
-    for offset in range(esp_int):
-        t = offset / max(esp_int - 1, 1)
-        if t < 0.3:
-            cor = sombra
-        elif t < 0.7:
-            cor = principal
-        else:
-            cor = highlight
-        if offset == 0 or offset == esp_int - 1:
-            cor = borda
-        draw.rounded_rectangle(
-            [x1i + offset, y1i + offset, x2i - offset, y2i - offset],
-            radius=raio_int,
-            outline=cor,
-            width=2
-        )
-
-    # Reflexo metálico (linha diagonal de brilho)
+    # 4. Reflexo metálico (brilho na lateral esquerda)
     brilho = CORES['brilho_metalico']
-    _x1 = cx - largura_corpo // 4
-    _y1 = y1 + int(30 * s)
-    _x2 = cx - largura_corpo // 4 + int(15 * s)
-    _y2 = y1 + int(120 * s)
-    draw.line([_x1, _y1, _x2, _y2], fill=brilho, width=int(6 * s))
+    draw.line([ox1 + int(9 * s), oy1 + int(35 * s),
+               ox1 + int(12 * s), oy1 + int(110 * s)],
+              fill=brilho, width=int(5 * s))
 
 
 def _desenhar_olhos(draw, cx, cy, escala=1.0, expressao="normal",
                     olhos_fechados=False, pupila_dx=0, pupila_dy=0):
-    """Desenha os olhos com expressão."""
+    """Desenha os olhos com expressão — proporcionais ao corpo."""
     s = escala
-    espacamento = int(75 * s)
-    raio = int(42 * s)
-    raio_pupila = int(18 * s)
+    espacamento = int(50 * s)
+    raio = int(22 * s)
+    raio_pupila = int(10 * s)
 
     raio_mod = raio
 
-    if expressao == "surpreso" or expressao == "chocado":
-        raio_mod = int(raio * 1.35)
-        raio_pupila = int(raio_pupila * 0.8)
+    if expressao in ("surpreso", "chocado"):
+        raio_mod = int(raio * 1.3)
+        raio_pupila = int(raio_pupila * 0.75)
     elif expressao == "sarcastico":
-        pupila_dy = pupila_dy - int(6 * s)
+        pupila_dy = pupila_dy - int(3 * s)
     elif expressao == "pensativo":
-        pupila_dx = pupila_dx + int(12 * s)
-        pupila_dy = pupila_dy - int(4 * s)
+        pupila_dx = pupila_dx + int(6 * s)
+        pupila_dy = pupila_dy - int(2 * s)
 
     for lado in (-1, 1):
         ox = cx + lado * espacamento // 2
         oy = cy
 
         if olhos_fechados or expressao == "rindo":
-            # Olho fechado — arco invertido (sorriso)
+            # Arco feliz (olhos semicerrados)
+            arc_r = int(raio * 0.85)
             draw.arc(
-                [ox - raio, oy - int(8 * s), ox + raio, oy + int(20 * s)],
+                [ox - arc_r, oy - int(3 * s), ox + arc_r, oy + int(10 * s)],
                 start=200, end=340,
-                fill=CORES['corpo_borda'], width=int(5 * s)
-            )
+                fill=CORES['corpo_borda'], width=int(4 * s))
         else:
             # Fundo branco
             draw.ellipse(
                 [ox - raio_mod, oy - raio_mod, ox + raio_mod, oy + raio_mod],
                 fill=CORES['olho_branco'],
                 outline=CORES['corpo_borda'],
-                width=int(3 * s)
-            )
+                width=int(2 * s))
             # Pupila
             px = ox + pupila_dx
             py = oy + pupila_dy
             draw.ellipse(
                 [px - raio_pupila, py - raio_pupila,
                  px + raio_pupila, py + raio_pupila],
-                fill=CORES['pupila']
-            )
+                fill=CORES['pupila'])
             # Brilho (catchlight)
-            br = int(7 * s)
-            bx = px - int(6 * s)
-            by = py - int(8 * s)
-            draw.ellipse([bx - br, by - br, bx + br, by + br],
-                         fill=CORES['pupila_brilho'])
-            # Segundo brilho
-            br2 = int(3 * s)
-            draw.ellipse([px + int(4 * s) - br2, py + int(4 * s) - br2,
-                          px + int(4 * s) + br2, py + int(4 * s) + br2],
-                         fill=(255, 255, 255, 120))
+            br = int(4 * s)
+            draw.ellipse(
+                [px - int(4 * s) - br, py - int(5 * s) - br,
+                 px - int(4 * s) + br, py - int(5 * s) + br],
+                fill=CORES['pupila_brilho'])
 
-        # Sobrancelhas
-        sob_y = oy - raio_mod - int(12 * s)
-        sob_w = int(35 * s)
-        sob_h = int(4 * s)
+        # Sobrancelhas (não desenhar quando rindo)
+        if expressao != "rindo":
+            sob_y = oy - raio_mod - int(8 * s)
+            sob_w = int(18 * s)
+            sob_h = int(3 * s)
 
-        if expressao == "sarcastico":
-            if lado == 1:
-                draw.line([ox - sob_w, sob_y + int(8 * s), ox + sob_w, sob_y - int(8 * s)],
+            if expressao == "sarcastico":
+                if lado == 1:
+                    draw.line([ox - sob_w, sob_y + int(5 * s),
+                               ox + sob_w, sob_y - int(5 * s)],
+                              fill=CORES['sobrancelha'], width=sob_h)
+                else:
+                    draw.line([ox - sob_w, sob_y, ox + sob_w, sob_y],
+                              fill=CORES['sobrancelha'], width=sob_h)
+            elif expressao in ("surpreso", "chocado"):
+                draw.line([ox - sob_w, sob_y - int(6 * s),
+                           ox + sob_w, sob_y - int(6 * s)],
                           fill=CORES['sobrancelha'], width=sob_h)
+            elif expressao == "pensativo":
+                if lado == -1:
+                    draw.line([ox - sob_w, sob_y - int(3 * s),
+                               ox + sob_w, sob_y + int(3 * s)],
+                              fill=CORES['sobrancelha'], width=sob_h)
+                else:
+                    draw.line([ox - sob_w, sob_y + int(3 * s),
+                               ox + sob_w, sob_y - int(3 * s)],
+                              fill=CORES['sobrancelha'], width=sob_h)
             else:
                 draw.line([ox - sob_w, sob_y, ox + sob_w, sob_y],
                           fill=CORES['sobrancelha'], width=sob_h)
-        elif expressao in ("surpreso", "chocado"):
-            draw.line([ox - sob_w, sob_y - int(10 * s), ox + sob_w, sob_y - int(10 * s)],
-                      fill=CORES['sobrancelha'], width=sob_h)
-        elif expressao == "pensativo":
-            if lado == -1:
-                draw.line([ox - sob_w, sob_y - int(4 * s), ox + sob_w, sob_y + int(4 * s)],
-                          fill=CORES['sobrancelha'], width=sob_h)
-            else:
-                draw.line([ox - sob_w, sob_y + int(4 * s), ox + sob_w, sob_y - int(4 * s)],
-                          fill=CORES['sobrancelha'], width=sob_h)
-        else:
-            draw.line([ox - sob_w, sob_y, ox + sob_w, sob_y],
-                      fill=CORES['sobrancelha'], width=sob_h)
 
 
-def _desenhar_boca(draw, cx, cy, escala=1.0, expressao="normal"):
-    """Desenha a boca com expressão."""
+def _desenhar_boca(draw, cx, cy, escala=1.0, expressao="normal", boca_aberta=False):
+    """Desenha a boca com expressão — proporcional ao corpo."""
     s = escala
-    largura = int(50 * s)
+    largura = int(32 * s)
     cor = CORES['boca']
+
+    if boca_aberta:
+        # Boca aberta (a falar)
+        raio_x = int(14 * s)
+        raio_y = int(10 * s)
+        draw.ellipse(
+            [cx - raio_x, cy - raio_y, cx + raio_x, cy + raio_y],
+            fill=(80, 85, 95, 255), outline=cor, width=int(3 * s))
+        return
 
     if expressao == "normal":
         draw.arc(
-            [cx - largura, cy - int(15 * s), cx + largura, cy + int(25 * s)],
-            start=10, end=170, fill=cor, width=int(5 * s))
+            [cx - largura, cy - int(8 * s), cx + largura, cy + int(16 * s)],
+            start=10, end=170, fill=cor, width=int(4 * s))
 
     elif expressao in ("surpreso", "chocado"):
-        raio_x = int(22 * s) if expressao == "surpreso" else int(30 * s)
-        raio_y = int(28 * s) if expressao == "surpreso" else int(35 * s)
+        raio_x = int(14 * s) if expressao == "surpreso" else int(18 * s)
+        raio_y = int(18 * s) if expressao == "surpreso" else int(22 * s)
         draw.ellipse(
             [cx - raio_x, cy - raio_y, cx + raio_x, cy + raio_y],
-            outline=cor, width=int(4 * s))
+            outline=cor, width=int(3 * s))
 
     elif expressao == "sarcastico":
         pontos = [
-            (cx - largura, cy + int(5 * s)),
-            (cx - int(15 * s), cy),
-            (cx + int(15 * s), cy - int(5 * s)),
-            (cx + largura, cy - int(15 * s)),
+            (cx - largura, cy + int(3 * s)),
+            (cx - int(10 * s), cy),
+            (cx + int(10 * s), cy - int(3 * s)),
+            (cx + largura, cy - int(8 * s)),
         ]
         for i in range(len(pontos) - 1):
-            draw.line([pontos[i], pontos[i + 1]], fill=cor, width=int(5 * s))
+            draw.line([pontos[i], pontos[i + 1]], fill=cor, width=int(4 * s))
 
     elif expressao == "rindo":
+        # Sorriso aberto — limpo, sem blush
+        larg = int(largura * 1.15)
         draw.arc(
-            [cx - largura, cy - int(20 * s), cx + largura, cy + int(30 * s)],
-            start=0, end=180, fill=cor, width=int(5 * s))
-        draw.line([cx - largura, cy - int(5 * s), cx + largura, cy - int(5 * s)],
-                  fill=cor, width=int(5 * s))
+            [cx - larg, cy - int(10 * s), cx + larg, cy + int(20 * s)],
+            start=0, end=180, fill=cor, width=int(4 * s))
+        # Interior escuro da boca
         draw.pieslice(
-            [cx - largura + int(5 * s), cy - int(5 * s),
-             cx + largura - int(5 * s), cy + int(28 * s)],
+            [cx - larg + int(3 * s), cy - int(3 * s),
+             cx + larg - int(3 * s), cy + int(18 * s)],
             start=0, end=180, fill=(80, 85, 95, 255))
-        blush = CORES['blush']
-        br = int(18 * s)
-        for lado in (-1, 1):
-            bx = cx + lado * int(70 * s)
-            by = cy - int(10 * s)
-            draw.ellipse([bx - br, by - br, bx + br, by + br], fill=blush)
 
     elif expressao == "pensativo":
-        draw.line([cx - int(25 * s), cy + int(3 * s),
-                   cx + int(25 * s), cy - int(3 * s)],
-                  fill=cor, width=int(5 * s))
+        draw.line([cx - int(16 * s), cy + int(2 * s),
+                   cx + int(16 * s), cy - int(2 * s)],
+                  fill=cor, width=int(4 * s))
 
 
 def _desenhar_braco(draw, ombro_x, ombro_y, escala=1.0, angulo=0,
@@ -320,6 +334,18 @@ def _desenhar_braco(draw, ombro_x, ombro_y, escala=1.0, angulo=0,
     comp = int(100 * s * comprimento_rel)
     rad = math.radians(angulo)
 
+    # Ombro (articulação limpa)
+    ombro_r = int(9 * s)
+    draw.ellipse([ombro_x - ombro_r, ombro_y - ombro_r,
+                  ombro_x + ombro_r, ombro_y + ombro_r],
+                 fill=CORES['corpo_principal'], outline=CORES['corpo_borda'],
+                 width=int(2 * s))
+    # Highlight metálico
+    hr = int(3 * s)
+    draw.ellipse([ombro_x - hr - int(1 * s), ombro_y - hr - int(1 * s),
+                  ombro_x + hr - int(1 * s), ombro_y + hr - int(1 * s)],
+                 fill=CORES['corpo_highlight'])
+
     # Cotovelo
     cotovelo_x = ombro_x + lado * int(comp * 0.5 * math.cos(rad + lado * 0.3))
     cotovelo_y = ombro_y + int(comp * 0.5 * math.sin(rad))
@@ -330,7 +356,7 @@ def _desenhar_braco(draw, ombro_x, ombro_y, escala=1.0, angulo=0,
 
     espessura_braco = int(14 * s)
 
-    # Braço superior
+    # Braço superior (do ombro ao cotovelo)
     draw.line([ombro_x, ombro_y, cotovelo_x, cotovelo_y],
               fill=CORES['corpo_principal'], width=espessura_braco)
     draw.line([ombro_x, ombro_y, cotovelo_x, cotovelo_y],
@@ -687,7 +713,7 @@ def _transicao_slide_down_out(t, current_x, current_y, canvas_h):
 
 def renderizar_clippy_frame(largura_canvas, altura_canvas, cx, cy,
                             escala=1.0, expressao="normal", pose=None,
-                            alpha=1.0, olhos_fechados=False):
+                            alpha=1.0, olhos_fechados=False, boca_aberta=False):
     """
     Renderiza 1 frame completo da Clippy (corpo + braços + pernas + rosto).
     """
@@ -704,13 +730,13 @@ def renderizar_clippy_frame(largura_canvas, altura_canvas, cx, cy,
     bcx = int(cx + body_dx)
     bcy = int(cy + body_dy)
 
-    # Coordenadas
-    olho_cy = bcy - int(80 * s)
-    boca_cy = bcy - int(20 * s)
-    ombro_y = bcy + int(30 * s)
+    # Coordenadas (proporcionais ao corpo 130w × 280h)
+    olho_cy = bcy - int(70 * s)
+    boca_cy = bcy - int(15 * s)
+    ombro_y = bcy + int(35 * s)
     base_y = bcy + int(140 * s)
-    ombro_esq_x = bcx - int(65 * s)
-    ombro_dir_x = bcx + int(65 * s)
+    ombro_esq_x = bcx - int(63 * s)
+    ombro_dir_x = bcx + int(63 * s)
 
     # 1. Pernas
     _desenhar_pernas(draw, bcx, base_y, s,
@@ -742,7 +768,7 @@ def renderizar_clippy_frame(largura_canvas, altura_canvas, cx, cy,
                     pupila_dy=int(pose.get('pupila_dy', 0) * s))
 
     # 6. Boca
-    _desenhar_boca(draw, bcx, boca_cy, s, expressao)
+    _desenhar_boca(draw, bcx, boca_cy, s, expressao, boca_aberta=boca_aberta)
 
     # Alpha global
     if alpha < 1.0:
@@ -1136,13 +1162,106 @@ def obter_duracao_audio(caminho_audio):
     return 3.0
 
 
+def _obter_video_props(caminho):
+    """Retorna (fps, width, height) do vídeo via ffprobe."""
+    try:
+        cmd = [
+            'ffprobe', '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=width,height,r_frame_rate',
+            '-of', 'json', caminho
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if res.returncode == 0:
+            info = json.loads(res.stdout)
+            stream = info['streams'][0]
+            w = int(stream['width'])
+            h = int(stream['height'])
+            rfr = stream['r_frame_rate']
+            num, den = rfr.split('/')
+            fps = round(int(num) / int(den))
+            return fps, w, h
+    except Exception:
+        pass
+    return 30, 1080, 1920
+
+
+def _gerar_frames_clippy_falando(duracao, fps, duracao_audio,
+                                 largura=400, altura=700,
+                                 pasta_saida="data"):
+    """
+    Gera frames com Clippy: entrada bounce → boca a mexer → saída fade.
+    Retorna lista de paths PNG.
+    """
+    total = int(duracao * fps)
+    paths = []
+
+    f_entrada = int(0.6 * fps)
+    f_audio_start = int(0.4 * fps)
+    f_audio_end = int((0.4 + duracao_audio) * fps)
+    f_saida = int((duracao - 0.5) * fps)
+
+    anim_func = ANIMACOES.get('idle', _pose_idle)
+    blink_interval = int(2.5 * fps)
+    blink_dur = 4
+
+    cx = largura // 2
+    cy = altura // 2 - 50
+
+    for i in range(total):
+        olhos_fechados = (i % blink_interval) >= (blink_interval - blink_dur)
+
+        # Boca: alterna aberta/fechada a cada 3 frames durante o áudio
+        boca_aberta = False
+        if f_audio_start <= i <= f_audio_end:
+            boca_aberta = (i // 3) % 2 == 0
+
+        # Animação de entrada/saída
+        if i < f_entrada:
+            t_e = i / max(f_entrada, 1)
+            progress = ease_out_back(t_e)
+            alpha = min(1.0, t_e * 3)
+            escala = 0.5 + 0.5 * progress
+            offset_x = int((1.0 - progress) * largura * 0.5)
+        elif i >= f_saida:
+            t_s = (i - f_saida) / max(total - f_saida, 1)
+            alpha = max(0, 1.0 - t_s * 2)
+            escala = 1.0 - 0.3 * t_s
+            offset_x = int(t_s * largura * 0.3)
+        else:
+            alpha = 1.0
+            escala = 1.0
+            offset_x = 0
+
+        t_a = i / max(total, 1)
+        pose = anim_func(t_a)
+
+        img = renderizar_clippy_frame(
+            largura, altura, cx + offset_x, cy,
+            escala=0.9 * escala, expressao="normal", pose=pose,
+            alpha=alpha, olhos_fechados=olhos_fechados,
+            boca_aberta=boca_aberta
+        )
+
+        fp = os.path.join(pasta_saida, f"clippy_seq_{i:04d}.png")
+        img.save(fp, 'PNG')
+        paths.append(fp)
+
+    return paths
+
+
 def criar_intro_clippy(caminho_video_base, texto_hook, caminho_saida,
                        duracao_intro=4.0, fade_out_duracao=0.5):
     """
-    Intro animada: fundo desfocado + Clippy animada + texto hook + áudio.
+    Intro clean:
+      • Fundo = primeiro frame do vídeo blurrado (paused)
+      • Clippy no canto inferior direito com boca a mexer
+      • Hook texto + áudio TTS
+      • Saída smooth + output fps/resolução igual ao vídeo original
     """
     try:
-        imagem_clippy = criar_personagem_clippy(expressao="normal", animacao="wave")
+        # Probe vídeo para matching perfeito
+        v_fps, v_w, v_h = _obter_video_props(caminho_video_base)
 
         audio_hook = sintetizar_voz_hook(texto_hook, "data/clippy_voz_temp.mp3")
         if not audio_hook:
@@ -1151,75 +1270,82 @@ def criar_intro_clippy(caminho_video_base, texto_hook, caminho_saida,
 
         duracao_audio = obter_duracao_audio(audio_hook)
         duracao_intro = max(duracao_intro, duracao_audio + 1.0)
+        total_frames = int(duracao_intro * v_fps)
 
-        # Gera sequência animada
-        print(f"     Gerando {int(duracao_intro * 30)} frames de animação...")
-        frames = gerar_sequencia_animacao(
-            animacao="wave", expressao="normal",
-            duracao=duracao_intro, fps=30,
-            largura=400, altura=700, pasta_saida="data",
-            entrada="bounce_in", saida="fade_out",
-            duracao_entrada=0.6, duracao_saida=0.5
+        # Gera Clippy frames com boca a mexer
+        print(f"     Gerando {total_frames} frames de animação (fala)...")
+        frames = _gerar_frames_clippy_falando(
+            duracao=duracao_intro, fps=v_fps,
+            duracao_audio=duracao_audio,
+            largura=400, altura=700, pasta_saida="data"
         )
 
-        # Cria vídeo da animação
-        clippy_anim_path = "data/clippy_intro_anim.mp4"
-        lista_path = "data/intro_frames_list.txt"
-        with open(lista_path, 'w', encoding='utf-8') as f:
-            for fp in frames:
-                f.write(f"file '{os.path.abspath(fp)}'\n")
-                f.write(f"duration {1 / 30}\n")
-            f.write(f"file '{os.path.abspath(frames[-1])}'\n")
-
-        subprocess.run([
-            'ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', lista_path,
-            '-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
-            clippy_anim_path
-        ], capture_output=True, text=True, timeout=60)
-
-        _limpar_temp(lista_path, frames)
-
-        if not os.path.exists(clippy_anim_path):
-            print("⚠️ Falha na animação da intro")
+        if not frames:
+            print("⚠️ Falha ao gerar frames Clippy")
             return None
 
-        # Monta intro final
+        # Texto escapado para ffmpeg drawtext
         texto_escapado = texto_hook.replace("'", "'\\''").replace(":", "\\:")
+        texto_escapado = texto_escapado.replace("[", "\\[").replace("]", "\\]")
 
+        t_text_in = 0.5
+        t_text_out = duracao_intro - fade_out_duracao - 0.3
+
+        # ── FILTER COMPLEX ─────────────────────────────────────────
         filtro = (
-            f"[0:v]trim=duration=0.1,setpts=PTS-STARTPTS,"
-            f"scale=1080:1920:force_original_aspect_ratio=decrease,"
-            f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
-            f"boxblur=25:8,eq=brightness=-0.25:saturation=0.7,"
-            f"loop=loop=-1:size=1:start=0[bg_loop];"
-            f"[bg_loop]trim=duration={duracao_intro},setpts=PTS-STARTPTS[fundo];"
-            f"[1:v]scale=400:700:force_original_aspect_ratio=decrease,"
-            f"pad=400:700:(ow-iw)/2:(oh-ih)/2:color=black@0[clippy_p];"
-            f"[fundo][clippy_p]overlay=(W-w)/2:(H-h)/2-200:shortest=1[com_c];"
+            # BG: 1 frame → blur → freeze → match resolution/fps
+            f"[0:v]trim=0:0.04,setpts=0,"
+            f"scale={v_w}:{v_h}:force_original_aspect_ratio=decrease,"
+            f"pad={v_w}:{v_h}:(ow-iw)/2:(oh-ih)/2:color=black,"
+            f"boxblur=20:5,"
+            f"eq=brightness=-0.12:saturation=0.7,"
+            f"loop=loop={total_frames + 10}:size=1:start=0,"
+            f"setpts=N/{v_fps}/TB,"
+            f"trim=duration={duracao_intro:.3f},setpts=PTS-STARTPTS[bg];"
+
+            # Clippy PNG (alpha preservado), escala para caber no canto
+            f"[1:v]format=rgba,"
+            f"scale=320:-1:flags=lanczos[clippy];"
+
+            # Overlay Clippy no canto inferior direito
+            f"[bg][clippy]overlay="
+            f"W-w-30:H-h-40:"
+            f"format=auto:eof_action=pass:shortest=0[com_c];"
+
+            # Texto hook acima da Clippy + fades
             f"[com_c]drawtext=text='{texto_escapado}':"
-            f"fontcolor=white:fontsize=46:borderw=5:bordercolor=black@0.9:"
-            f"x=(w-text_w)/2:y=h*0.78:"
-            f"shadowcolor=black@0.6:shadowx=3:shadowy=3,"
-            f"fade=t=in:st=0:d=0.3,"
-            f"fade=t=out:st={duracao_intro - fade_out_duracao}:d={fade_out_duracao}[vfinal]"
+            f"fontcolor=white:fontsize=42:borderw=4:bordercolor=black@0.85:"
+            f"x=(w-text_w)/2:y=h*0.35:"
+            f"shadowcolor=black@0.5:shadowx=2:shadowy=2:"
+            f"enable='between(t,{t_text_in:.2f},{t_text_out:.2f})':"
+            f"alpha='if(lt(t,{t_text_in + 0.3:.2f}),(t-{t_text_in:.2f})/0.3,"
+            f"if(gt(t,{t_text_out - 0.3:.2f}),({t_text_out:.2f}-t)/0.3,1))',"
+            f"fade=t=in:st=0:d=0.4,"
+            f"fade=t=out:st={duracao_intro - fade_out_duracao:.3f}:"
+            f"d={fade_out_duracao:.3f}[vfinal]"
         )
+
+        seq_pattern = os.path.join("data", "clippy_seq_%04d.png")
 
         cmd = [
             'ffmpeg', '-y',
             '-i', caminho_video_base,
-            '-i', clippy_anim_path,
+            '-framerate', str(v_fps), '-i', seq_pattern,
             '-i', audio_hook,
             '-filter_complex', filtro,
             '-map', '[vfinal]', '-map', '2:a',
             '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+            '-pix_fmt', 'yuv420p', '-r', str(v_fps),
             '-c:a', 'aac', '-b:a', '192k',
-            '-shortest', '-movflags', '+faststart',
+            '-t', f'{duracao_intro:.3f}',
+            '-movflags', '+faststart',
             caminho_saida
         ]
 
         resultado = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
 
-        for tmp in [audio_hook, clippy_anim_path]:
+        _limpar_temp(None, frames)
+        for tmp in [audio_hook]:
             if os.path.exists(tmp):
                 try:
                     os.remove(tmp)
@@ -1230,7 +1356,7 @@ def criar_intro_clippy(caminho_video_base, texto_hook, caminho_saida,
             print(f"✅ Intro Clippy criada: {caminho_saida}")
             return caminho_saida
         else:
-            print(f"⚠️ Erro intro: {resultado.stderr[:300]}")
+            print(f"⚠️ Erro intro: {resultado.stderr[:400]}")
             return None
 
     except Exception as e:
@@ -1307,8 +1433,9 @@ def inserir_intervencoes_clippy(caminho_video, intervencoes, segmentos_whisper,
             fade_out_st = ov['duracao'] - 0.3
 
             filtros.append(
-                f"[{input_idx}:v]scale=320:560:force_original_aspect_ratio=decrease,"
-                f"pad=320:560:(ow-iw)/2:(oh-ih)/2:color=black@0,"
+                f"[{input_idx}:v]format=rgba,"
+                f"scale=300:525:force_original_aspect_ratio=decrease,"
+                f"pad=300:525:(ow-iw)/2:(oh-ih)/2:color=0x00000000,"
                 f"fade=t=in:st=0:d={fade_in}:alpha=1,"
                 f"fade=t=out:st={fade_out_st}:d=0.3:alpha=1"
                 f"[ov{idx}]"
@@ -1316,17 +1443,19 @@ def inserir_intervencoes_clippy(caminho_video, intervencoes, segmentos_whisper,
 
             filtros.append(
                 f"[{corrente}][ov{idx}]overlay="
-                f"x=W-w-30:y=H/2-h/2-100:"
+                f"x=W-w-20:y=H-h-30:"
+                f"format=auto:"
                 f"enable='between(t,{inicio:.2f},{fim:.2f})':"
                 f"eof_action=pass[v{idx}]"
             )
 
             t_inicio = inicio + 0.3
             t_fim = fim - 0.3
+            texto_esc = texto_esc.replace("[", "\\[").replace("]", "\\]")
             filtros.append(
                 f"[v{idx}]drawtext=text='{texto_esc}':"
-                f"fontcolor=white:fontsize=38:borderw=4:bordercolor=black@0.9:"
-                f"x=W-text_w-60:y=H/2-350:"
+                f"fontcolor=white:fontsize=36:borderw=4:bordercolor=black@0.9:"
+                f"x=W-text_w-40:y=H-580:"
                 f"shadowcolor=black@0.5:shadowx=2:shadowy=2:"
                 f"enable='between(t,{t_inicio:.2f},{t_fim:.2f})'"
                 f"[vt{idx}]"
@@ -1351,7 +1480,7 @@ def inserir_intervencoes_clippy(caminho_video, intervencoes, segmentos_whisper,
         cmd.extend([
             '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
             '-c:a', 'aac', '-b:a', '192k',
-            '-movflags', '+faststart', '-shortest',
+            '-movflags', '+faststart',
             caminho_saida
         ])
 
@@ -1380,20 +1509,73 @@ def inserir_intervencoes_clippy(caminho_video, intervencoes, segmentos_whisper,
 #  CONCATENAÇÃO
 # ════════════════════════════════════════════════════════════════════
 
-def concatenar_intro_com_video(caminho_intro, caminho_video, caminho_saida):
-    """Concatena intro + vídeo via FFmpeg concat demuxer."""
+def concatenar_intro_com_video(caminho_intro, caminho_video, caminho_saida,
+                               xfade_dur=0.6):
+    """
+    Concatena intro + vídeo com xfade suave (blur → vídeo nítido).
+    Fallback: concat demuxer se xfade falhar.
+    """
     try:
+        # Alinha props para reduzir falhas no xfade/acrossfade.
+        v_fps, v_w, v_h = _obter_video_props(caminho_video)
+
+        # Obter duração da intro para calcular offset do xfade
+        dur_intro = obter_duracao_audio(caminho_intro)  # funciona para vídeo também
+        if not dur_intro or dur_intro < 1:
+            dur_intro = 4.5
+        offset = max(0.1, dur_intro - xfade_dur)
+
+        # Método 1: xfade com transição suave (com normalização AV)
+        filtro = (
+            f"[0:v]fps={v_fps},scale={v_w}:{v_h}:flags=lanczos,"
+            f"format=yuv420p,setsar=1,settb=AVTB,setpts=PTS-STARTPTS[v0];"
+            f"[1:v]fps={v_fps},scale={v_w}:{v_h}:flags=lanczos,"
+            f"format=yuv420p,setsar=1,settb=AVTB,setpts=PTS-STARTPTS[v1];"
+            f"[v0][v1]xfade=transition=fade:duration={xfade_dur:.2f}"
+            f":offset={offset:.2f}[v];"
+            f"[0:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+            f"aresample=48000,asetpts=PTS-STARTPTS[a0];"
+            f"[1:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+            f"aresample=48000,asetpts=PTS-STARTPTS[a1];"
+            f"[a0][a1]acrossfade=d={xfade_dur:.2f}:c1=tri:c2=tri[a]"
+        )
+
+        cmd_xfade = [
+            'ffmpeg', '-y',
+            '-i', caminho_intro, '-i', caminho_video,
+            '-filter_complex', filtro,
+            '-map', '[v]', '-map', '[a]',
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+            '-pix_fmt', 'yuv420p',
+            '-r', str(v_fps),
+            '-c:a', 'aac', '-b:a', '192k',
+            '-movflags', '+faststart', caminho_saida
+        ]
+        resultado = subprocess.run(cmd_xfade, capture_output=True, text=True, timeout=180)
+
+        if resultado.returncode == 0 and os.path.exists(caminho_saida) \
+                and os.path.getsize(caminho_saida) > 5000:
+            print(f"✅ Vídeo concatenado (xfade {xfade_dur:.1f}s): {caminho_saida}")
+            return True
+        else:
+            print(f"     ⚠️ xfade stderr: {resultado.stderr[:350]}")
+
+        # Método 2: fallback concat com re-encode (evita mismatch fps/codec)
+        print(f"     ⚠️ xfade falhou, usando concat com re-encode...")
         lista_path = "data/concat_list_temp.txt"
         with open(lista_path, 'w', encoding='utf-8') as f:
             f.write(f"file '{os.path.abspath(caminho_intro)}'\n")
             f.write(f"file '{os.path.abspath(caminho_video)}'\n")
 
-        cmd = [
+        cmd_concat = [
             'ffmpeg', '-y', '-f', 'concat', '-safe', '0',
-            '-i', lista_path, '-c', 'copy',
+            '-i', lista_path,
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+            '-pix_fmt', 'yuv420p',
+            '-c:a', 'aac', '-b:a', '192k',
             '-movflags', '+faststart', caminho_saida
         ]
-        resultado = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        resultado2 = subprocess.run(cmd_concat, capture_output=True, text=True, timeout=180)
 
         if os.path.exists(lista_path):
             try:
@@ -1401,11 +1583,11 @@ def concatenar_intro_com_video(caminho_intro, caminho_video, caminho_saida):
             except OSError:
                 pass
 
-        if resultado.returncode == 0 and os.path.exists(caminho_saida):
-            print(f"✅ Vídeo concatenado: {caminho_saida}")
+        if resultado2.returncode == 0 and os.path.exists(caminho_saida):
+            print(f"✅ Vídeo concatenado (concat): {caminho_saida}")
             return True
         else:
-            print(f"⚠️ Erro concat: {resultado.stderr[:200]}")
+            print(f"⚠️ Erro concat: {resultado2.stderr[:200]}")
             return False
     except Exception as e:
         print(f"⚠️ Erro concat: {e}")
