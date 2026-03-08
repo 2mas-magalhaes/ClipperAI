@@ -268,19 +268,32 @@ def _desenhar_olhos(draw, cx, cy, escala=1.0, expressao="normal",
                           fill=CORES['sobrancelha'], width=sob_h)
 
 
-def _desenhar_boca(draw, cx, cy, escala=1.0, expressao="normal", boca_aberta=False):
+def _desenhar_boca(draw, cx, cy, escala=1.0, expressao="normal",
+                   boca_aberta=False, boca_abertura=0.0):
     """Desenha a boca com expressão — proporcional ao corpo."""
     s = escala
     largura = int(32 * s)
     cor = CORES['boca']
 
+    abertura = max(0.0, min(1.0, float(boca_abertura or 0.0)))
     if boca_aberta:
-        # Boca aberta (a falar)
-        raio_x = int(14 * s)
-        raio_y = int(10 * s)
+        abertura = max(abertura, 0.75)
+
+    if abertura > 0.01:
+        # Boca de fala contínua: abertura variável para parecer voz natural.
+        raio_x = int((10 + 5 * abertura) * s)
+        raio_y = int((3 + 11 * abertura) * s)
         draw.ellipse(
             [cx - raio_x, cy - raio_y, cx + raio_x, cy + raio_y],
             fill=(80, 85, 95, 255), outline=cor, width=int(3 * s))
+
+        # Pequeno brilho superior para dar volume.
+        hl_y = cy - int((raio_y * 0.45))
+        draw.arc(
+            [cx - int(raio_x * 0.7), hl_y - int(raio_y * 0.25),
+             cx + int(raio_x * 0.7), hl_y + int(raio_y * 0.25)],
+            start=200, end=340, fill=(150, 160, 175, 200), width=max(1, int(2 * s))
+        )
         return
 
     if expressao == "normal":
@@ -713,7 +726,8 @@ def _transicao_slide_down_out(t, current_x, current_y, canvas_h):
 
 def renderizar_clippy_frame(largura_canvas, altura_canvas, cx, cy,
                             escala=1.0, expressao="normal", pose=None,
-                            alpha=1.0, olhos_fechados=False, boca_aberta=False):
+                            alpha=1.0, olhos_fechados=False,
+                            boca_aberta=False, boca_abertura=0.0):
     """
     Renderiza 1 frame completo da Clippy (corpo + braços + pernas + rosto).
     """
@@ -768,7 +782,10 @@ def renderizar_clippy_frame(largura_canvas, altura_canvas, cx, cy,
                     pupila_dy=int(pose.get('pupila_dy', 0) * s))
 
     # 6. Boca
-    _desenhar_boca(draw, bcx, boca_cy, s, expressao, boca_aberta=boca_aberta)
+    _desenhar_boca(
+        draw, bcx, boca_cy, s, expressao,
+        boca_aberta=boca_aberta, boca_abertura=boca_abertura
+    )
 
     # Alpha global
     if alpha < 1.0:
@@ -954,6 +971,20 @@ def _limpar_temp(lista_path, frames):
                 os.remove(f)
             except OSError:
                 pass
+
+
+def _escape_drawtext_text(texto):
+    """Escapa texto para uso seguro em drawtext=text='...' do FFmpeg."""
+    if texto is None:
+        return ""
+    out = str(texto)
+    out = out.replace('\\', '\\\\')
+    out = out.replace("'", "'\\''")
+    out = out.replace(':', '\\:')
+    out = out.replace('[', '\\[').replace(']', '\\]')
+    out = out.replace('%', '\\%').replace(',', '\\,')
+    out = out.replace('\n', ' ')
+    return out
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1211,10 +1242,18 @@ def _gerar_frames_clippy_falando(duracao, fps, duracao_audio,
     for i in range(total):
         olhos_fechados = (i % blink_interval) >= (blink_interval - blink_dur)
 
-        # Boca: alterna aberta/fechada a cada 3 frames durante o áudio
+        # Boca: abertura contínua (evita efeito robótico abre/fecha).
         boca_aberta = False
+        boca_abertura = 0.0
         if f_audio_start <= i <= f_audio_end:
-            boca_aberta = (i // 3) % 2 == 0
+            boca_aberta = True
+            fase = (i - f_audio_start)
+            onda = 0.5 + 0.5 * math.sin(fase * 0.85)
+            boca_abertura = 0.22 + 0.78 * onda
+
+            # Micro-pauses periódicas para ritmo de fala natural.
+            if (fase // max(1, int(0.33 * fps))) % 3 == 2:
+                boca_abertura *= 0.4
 
         # Animação de entrada/saída
         if i < f_entrada:
@@ -1240,7 +1279,8 @@ def _gerar_frames_clippy_falando(duracao, fps, duracao_audio,
             largura, altura, cx + offset_x, cy,
             escala=0.9 * escala, expressao="normal", pose=pose,
             alpha=alpha, olhos_fechados=olhos_fechados,
-            boca_aberta=boca_aberta
+            boca_aberta=boca_aberta,
+            boca_abertura=boca_abertura
         )
 
         fp = os.path.join(pasta_saida, f"clippy_seq_{i:04d}.png")
@@ -1271,6 +1311,10 @@ def criar_intro_clippy(caminho_video_base, texto_hook, caminho_saida,
         duracao_audio = obter_duracao_audio(audio_hook)
         duracao_intro = max(duracao_intro, duracao_audio + 1.0)
         total_frames = int(duracao_intro * v_fps)
+        dur_video = max(0.2, obter_duracao_audio(caminho_video_base))
+        t_bg = max(0.20, min(1.80, dur_video * 0.35))
+        t_bg = min(t_bg, max(0.20, dur_video - 0.08))
+        t_bg_end = min(dur_video, t_bg + 0.04)
 
         # Gera Clippy frames com boca a mexer
         print(f"     Gerando {total_frames} frames de animação (fala)...")
@@ -1284,17 +1328,17 @@ def criar_intro_clippy(caminho_video_base, texto_hook, caminho_saida,
             print("⚠️ Falha ao gerar frames Clippy")
             return None
 
-        # Texto escapado para ffmpeg drawtext
-        texto_escapado = texto_hook.replace("'", "'\\''").replace(":", "\\:")
-        texto_escapado = texto_escapado.replace("[", "\\[").replace("]", "\\]")
+        # Texto no mesmo estilo visual das legendas ASS principais.
+        texto_escapado = _escape_drawtext_text((texto_hook or '').upper())
+        hook_fontsize = max(52, int(v_h * (100 / 1920.0)))
 
         t_text_in = 0.5
         t_text_out = duracao_intro - fade_out_duracao - 0.3
 
         # ── FILTER COMPLEX ─────────────────────────────────────────
         filtro = (
-            # BG: 1 frame → blur → freeze → match resolution/fps
-            f"[0:v]trim=0:0.04,setpts=0,"
+            # BG: frame após alguns instantes (evita primeiros frames pretos).
+            f"[0:v]trim=start={t_bg:.2f}:end={t_bg_end:.2f},setpts=0,"
             f"scale={v_w}:{v_h}:force_original_aspect_ratio=decrease,"
             f"pad={v_w}:{v_h}:(ow-iw)/2:(oh-ih)/2:color=black,"
             f"boxblur=20:5,"
@@ -1305,7 +1349,7 @@ def criar_intro_clippy(caminho_video_base, texto_hook, caminho_saida,
 
             # Clippy PNG (alpha preservado), escala para caber no canto
             f"[1:v]format=rgba,"
-            f"scale=320:-1:flags=lanczos[clippy];"
+            f"scale=430:-1:flags=lanczos[clippy];"
 
             # Overlay Clippy no canto inferior direito
             f"[bg][clippy]overlay="
@@ -1314,9 +1358,10 @@ def criar_intro_clippy(caminho_video_base, texto_hook, caminho_saida,
 
             # Texto hook acima da Clippy + fades
             f"[com_c]drawtext=text='{texto_escapado}':"
-            f"fontcolor=white:fontsize=42:borderw=4:bordercolor=black@0.85:"
-            f"x=(w-text_w)/2:y=h*0.35:"
-            f"shadowcolor=black@0.5:shadowx=2:shadowy=2:"
+            f"fontcolor=white:fontsize={hook_fontsize}:"
+            f"borderw=5:bordercolor=black@1.0:"
+            f"x=(w-text_w)/2:y=h*0.78:"
+            f"shadowcolor=black@0.85:shadowx=3:shadowy=3:"
             f"enable='between(t,{t_text_in:.2f},{t_text_out:.2f})':"
             f"alpha='if(lt(t,{t_text_in + 0.3:.2f}),(t-{t_text_in:.2f})/0.3,"
             f"if(gt(t,{t_text_out - 0.3:.2f}),({t_text_out:.2f}-t)/0.3,1))',"
@@ -1427,15 +1472,15 @@ def inserir_intervencoes_clippy(caminho_video, intervencoes, segmentos_whisper,
         for idx, ov in enumerate(overlays):
             inicio = ov['timestamp']
             fim = inicio + ov['duracao']
-            texto_esc = ov['texto'].replace("'", "'\\''").replace(":", "\\:")
+            texto_esc = _escape_drawtext_text(str(ov['texto']).upper())
 
             fade_in = 0.3
             fade_out_st = ov['duracao'] - 0.3
 
             filtros.append(
                 f"[{input_idx}:v]format=rgba,"
-                f"scale=300:525:force_original_aspect_ratio=decrease,"
-                f"pad=300:525:(ow-iw)/2:(oh-ih)/2:color=0x00000000,"
+                f"scale=380:665:force_original_aspect_ratio=decrease,"
+                f"pad=380:665:(ow-iw)/2:(oh-ih)/2:color=0x00000000,"
                 f"fade=t=in:st=0:d={fade_in}:alpha=1,"
                 f"fade=t=out:st={fade_out_st}:d=0.3:alpha=1"
                 f"[ov{idx}]"
@@ -1451,12 +1496,12 @@ def inserir_intervencoes_clippy(caminho_video, intervencoes, segmentos_whisper,
 
             t_inicio = inicio + 0.3
             t_fim = fim - 0.3
-            texto_esc = texto_esc.replace("[", "\\[").replace("]", "\\]")
             filtros.append(
                 f"[v{idx}]drawtext=text='{texto_esc}':"
-                f"fontcolor=white:fontsize=36:borderw=4:bordercolor=black@0.9:"
-                f"x=W-text_w-40:y=H-580:"
-                f"shadowcolor=black@0.5:shadowx=2:shadowy=2:"
+                f"fontcolor=white:fontsize=90:"
+                f"borderw=5:bordercolor=black@1.0:"
+                f"x=(W-text_w)/2:y=H-280:"
+                f"shadowcolor=black@0.85:shadowx=3:shadowy=3:"
                 f"enable='between(t,{t_inicio:.2f},{t_fim:.2f})'"
                 f"[vt{idx}]"
             )
@@ -1464,9 +1509,38 @@ def inserir_intervencoes_clippy(caminho_video, intervencoes, segmentos_whisper,
             corrente = f"vt{idx}"
             input_idx += 1
 
+        # Mistura áudio base + vozes das intervenções no timestamp correto.
+        filtros.append(
+            "[0:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+            "aresample=48000[abase]"
+        )
+
+        labels_audio = []
+        audio_input_start = 1 + len(overlays)
+        audio_cursor = 0
+        for idx, ov in enumerate(overlays):
+            if not ov.get('audio'):
+                continue
+            aidx = audio_input_start + audio_cursor
+            audio_cursor += 1
+            delay_ms = int(max(0.0, ov['timestamp']) * 1000)
+            label = f"ac{idx}"
+            filtros.append(
+                f"[{aidx}:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+                f"aresample=48000,adelay={delay_ms}|{delay_ms},volume=1.25[{label}]"
+            )
+            labels_audio.append(label)
+
+        if labels_audio:
+            chain = "[abase]" + "".join(f"[{lb}]" for lb in labels_audio)
+            filtros.append(
+                f"{chain}amix=inputs={1 + len(labels_audio)}:normalize=0:dropout_transition=0,"
+                f"alimiter=limit=0.95[aout]"
+            )
+
         filtro_complexo = ";".join(filtros)
 
-        cmd = ['ffmpeg', '-y', '-i', caminho_video]
+        cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y', '-i', caminho_video]
         for ov in overlays:
             cmd.extend(['-loop', '1', '-i', ov['imagem']])
 
@@ -1475,7 +1549,10 @@ def inserir_intervencoes_clippy(caminho_video, intervencoes, segmentos_whisper,
             cmd.extend(['-i', a])
 
         cmd.extend(['-filter_complex', filtro_complexo])
-        cmd.extend(['-map', f'[{corrente}]', '-map', '0:a'])
+        if labels_audio:
+            cmd.extend(['-map', f'[{corrente}]', '-map', '[aout]'])
+        else:
+            cmd.extend(['-map', f'[{corrente}]', '-map', '0:a'])
 
         cmd.extend([
             '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
@@ -1497,7 +1574,7 @@ def inserir_intervencoes_clippy(caminho_video, intervencoes, segmentos_whisper,
             print(f"     ✅ Intervenções inseridas!")
             return caminho_saida
         else:
-            print(f"     ⚠️ Falha: {resultado.stderr[:300]}")
+            print(f"     ⚠️ Falha: {resultado.stderr[:1200]}")
             return caminho_video
 
     except Exception as e:
