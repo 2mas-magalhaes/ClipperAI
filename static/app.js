@@ -74,6 +74,7 @@ async function refreshAll() {
         fetchSettings(),
         fetchWorkerStatus(),
         fetchSchedules(),
+        refreshS7evenList(),
     ]);
 }
 
@@ -88,6 +89,9 @@ function refreshPage(page) {
             break;
         case 'channels':
             fetchChannels();
+            break;
+        case 's7even':
+            refreshS7evenList();
             break;
         case 'followed':
             fetchFollowedChannels();
@@ -1968,6 +1972,7 @@ async function loadChannelVideos(channelId) {
 
 function populateChannelSelects() {
     populateChannelSelect('video-channel');
+    populateChannelSelect('s7even-channel');
     populateChannelSelect('setting-default-channel');
     populateChannelSelect('followed-target-channel');
 }
@@ -3319,3 +3324,209 @@ document.addEventListener('keydown', (e) => {
         document.querySelectorAll('.modal-overlay').forEach(m => m.style.display = 'none');
     }
 });
+
+// ═══════════════════════════════════════════════
+//  S7EVEN VIDEOS (Documentários de Mistério)
+// ═══════════════════════════════════════════════
+
+let s7evenData = [];
+
+async function refreshS7evenList() {
+    try {
+        const res = await fetch('/api/s7even');
+        const data = await res.json();
+        
+        if (data.sucesso) {
+            s7evenData = data.videos || [];
+            renderS7evenTable();
+            document.getElementById('s7even-badge').textContent = s7evenData.length;
+        }
+    } catch (err) {
+        console.error('Erro ao carregar S7even videos:', err);
+    }
+}
+
+function renderS7evenTable() {
+    const tbody = document.getElementById('s7even-tbody');
+    const empty = document.getElementById('s7even-empty');
+    
+    if (s7evenData.length === 0) {
+        tbody.innerHTML = '';
+        empty.style.display = 'flex';
+        return;
+    }
+    
+    empty.style.display = 'none';
+    tbody.innerHTML = s7evenData.map((video, idx) => `
+        <tr>
+            <td>${idx + 1}</td>
+            <td>
+                <strong>${esc(video.title)}</strong>
+                <div style="font-size:0.85rem;color:var(--text-muted)">${esc(video.url)}</div>
+            </td>
+            <td><span class="tag">${video.content_type === 's7even' ? 'S7even' : 'Normal'}</span></td>
+            <td>
+                <div class="status-badge" style="background:${getStatusColor(video.status)};">
+                    ${video.status}
+                </div>
+            </td>
+            <td>${new Date(video.created_at).toLocaleDateString('pt-PT', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+            <td>
+                <div style="display:flex;align-items:center;gap:8px;font-size:0.85rem">
+                    <div style="flex:1;height:6px;background:var(--bg-secondary);border-radius:3px">
+                        <div style="height:100%;background:var(--blue);width:${video.progress}%;border-radius:3px;transition:width 0.3s"></div>
+                    </div>
+                    <span style="min-width:30px">${video.progress}%</span>
+                </div>
+            </td>
+            <td>
+                <button class="btn btn-sm" onclick="viewS7evenDetails('${video.id}')" title="Ver detalhes">
+                    <i class="fas fa-eye"></i>
+                </button>
+                <button class="btn btn-sm" onclick="publishS7evenVideo('${video.id}')" title="Publicar">
+                    <i class="fas fa-upload"></i>
+                </button>
+                <button class="btn btn-sm btn-danger" onclick="deleteS7evenVideo('${video.id}')" title="Apagar">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function quickCreateS7even() {
+    const tema = document.getElementById('s7even-tema').value.trim();
+    const channelId = document.getElementById('s7even-channel').value;
+    const autoPublish = document.getElementById('s7even-auto-publish').checked;
+    
+    const btn = event.target;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Criando...';
+    
+    try {
+        const res = await fetch('/api/s7even', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                tema_preferido: tema || undefined,
+                channel_id: channelId || null,
+                auto_publish: autoPublish
+            })
+        });
+        
+        const data = await res.json();
+        
+        if (data.sucesso) {
+            toast(`✅ Vídeo criado: ${data.video.titulo}`, 'success');
+            document.getElementById('s7even-tema').value = '';
+            document.getElementById('s7even-channel').value = '';
+            document.getElementById('s7even-auto-publish').checked = false;
+            setTimeout(() => refreshS7evenList(), 1000);
+        } else {
+            toast(`❌ Erro: ${data.erro}`, 'error');
+        }
+    } catch (err) {
+        toast(`❌ Erro ao criar vídeo: ${err.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-sparkles"></i> Criar Documentário';
+    }
+}
+
+function createS7evenVideo() {
+    quickCreateS7even();
+}
+
+async function publishS7evenVideo(videoId) {
+    const channelId = document.getElementById('s7even-channel').value;
+    
+    if (!channelId) {
+        toast('⚠️ Seleciona um canal primeiro', 'info');
+        return;
+    }
+    
+    try {
+        const res = await fetch(`/api/s7even/${videoId}/publish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                channel_id: channelId,
+                auto_publish: true
+            })
+        });
+        
+        const data = await res.json();
+        if (data.sucesso) {
+            toast('✅ Vídeo marcado para publicação', 'success');
+            setTimeout(() => refreshS7evenList(), 1000);
+        } else {
+            toast(`❌ Erro: ${data.erro}`, 'error');
+        }
+    } catch (err) {
+        toast(`❌ Erro ao publicar: ${err.message}`, 'error');
+    }
+}
+
+async function deleteS7evenVideo(videoId) {
+    if (!confirm('⚠️ Tens a certeza que queres apagar este vídeo?')) return;
+    
+    try {
+        const res = await fetch(`/api/s7even/${videoId}`, {
+            method: 'DELETE'
+        });
+        
+        toast('✅ Vídeo apagado', 'success');
+        setTimeout(() => refreshS7evenList(), 500);
+    } catch (err) {
+        toast(`❌ Erro ao apagar: ${err.message}`, 'error');
+    }
+}
+
+async function viewS7evenDetails(videoId) {
+    try {
+        const res = await fetch(`/api/s7even/${videoId}`);
+        const data = await res.json();
+        
+        if (data.sucesso) {
+            const historia = data.historia || {};
+            const video = data.video || {};
+            
+            alert(`
+📽️ S7EVEN VIDEO
+═══════════════════════════════════════════
+
+Título: ${data.video.title}
+Status: ${video.status}
+Progresso: ${video.progress}%
+
+HISTÓRIA
+────────
+${historia.titulo || 'N/A'}
+Local: ${historia.local || 'N/A'}
+Data: ${historia.data_evento || 'N/A'}
+
+Resumo:
+${historia.resumo || 'N/A'}
+
+URL: ${video.url}
+            `);
+        }
+    } catch (err) {
+        toast(`❌ Erro ao carregar detalhes: ${err.message}`, 'error');
+    }
+}
+
+function openS7evenAdvancedModal() {
+    toast('⏳ Opções avançadas em desenvolvimento...', 'info');
+}
+
+function getStatusColor(status) {
+    const colors = {
+        'queued': 'var(--blue)',
+        'processing': 'var(--orange)',
+        'done': 'var(--green)',
+        'published': 'var(--purple)',
+        'error': 'var(--red)'
+    };
+    return colors[status] || 'var(--gray)';
+}

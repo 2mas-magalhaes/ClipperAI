@@ -47,6 +47,11 @@
                 <span>Agendamentos</span>
                 <span class="badge" id="schedules-badge">0</span>
             </li>
+            <li class="nav-item" data-page="s7even">
+                <i class="fas fa-film"></i>
+                <span>S7even Videos</span>
+                <span class="badge" id="s7even-badge">0</span>
+            </li>
             <li class="nav-item" data-page="settings">
                 <i class="fas fa-cog"></i>
                 <span>Definições</span>
@@ -413,6 +418,88 @@
                     <div class="empty-state" id="schedules-empty" style="display:none">
                         <i class="fas fa-calendar-times"></i>
                         <p>Não há vídeos agendados</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════ S7EVEN VIDEOS ═══════════════ -->
+        <div class="page" id="page-s7even">
+            <div class="page-header">
+                <h1>S7even Videos — Documentários de Mistério</h1>
+                <p class="subtitle">Cria documentários automáticos estilo S7even</p>
+                <div class="page-actions">
+                    <button class="btn btn-primary" onclick="createS7evenVideo()">
+                        <i class="fas fa-plus"></i> Criar Novo
+                    </button>
+                    <button class="btn" onclick="refreshS7evenList()">
+                        <i class="fas fa-sync-alt"></i> Atualizar
+                    </button>
+                </div>
+            </div>
+
+            <!-- Quick Create Form -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-bolt"></i> Criar Documentário Rápido</h2>
+                </div>
+                <div class="card-body">
+                    <div class="form-row">
+                        <div class="form-group" style="flex:2">
+                            <label>Tema (deixar vazio para aleatório)</label>
+                            <input type="text" id="s7even-tema" class="form-control" placeholder="Ex: crime bizarro, mistério histórico, anomalia paranormal...">
+                        </div>
+                        <div class="form-group" style="flex:1">
+                            <label>Canal</label>
+                            <select id="s7even-channel" class="form-control">
+                                <option value="">— Deixar depois —</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="s7even-auto-publish">
+                            <span>Publicar automaticamente após edição</span>
+                        </label>
+                    </div>
+                    <div style="display:flex;gap:8px">
+                        <button class="btn btn-primary" onclick="quickCreateS7even()">
+                            <i class="fas fa-sparkles"></i> Criar Documentário
+                        </button>
+                        <button class="btn" onclick="openS7evenAdvancedModal()">
+                            <i class="fas fa-sliders-h"></i> Opções Avançadas
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- S7even Videos List -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-list"></i> Vídeos S7even Criados</h2>
+                </div>
+                <div class="card-body no-pad">
+                    <table class="table" id="s7even-table">
+                        <thead>
+                            <tr>
+                                <th style="width:40px">#</th>
+                                <th>Título</th>
+                                <th>Tema</th>
+                                <th>Estado</th>
+                                <th>Criado em</th>
+                                <th>Progresso</th>
+                                <th style="width:120px">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="s7even-tbody">
+                        </tbody>
+                    </table>
+                    <div class="empty-state" id="s7even-empty" style="display:none">
+                        <i class="fas fa-film"></i>
+                        <p>Nenhum vídeo S7even criado ainda</p>
+                        <button class="btn btn-primary" onclick="createS7evenVideo()">
+                            <i class="fas fa-plus"></i> Criar Primeiro Vídeo
+                        </button>
                     </div>
                 </div>
             </div>

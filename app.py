@@ -37,6 +37,13 @@ import shutil as shell_utils
 import database as db
 from worker import worker
 
+# S7even AI — Criação de documentários de mistério
+try:
+    import s7even_ai
+    _HAS_S7EVEN = True
+except ImportError:
+    _HAS_S7EVEN = False
+
 try:
     import proxy_rotator
     _HAS_PROXY = True
@@ -2648,6 +2655,182 @@ def _run_as_watchdog():
 
         print(f"🔄 A reiniciar em {delay}s...\n")
         _time.sleep(delay)
+
+
+# ═══════════════════════════════════════════════
+#  API — S7EVEN AI (Documentários de Mistério)
+# ═══════════════════════════════════════════════
+
+@app.route("/api/s7even", methods=["POST"])
+def api_create_s7even_video():
+    """Cria um novo vídeo documentário tipo S7even com IA.
+    
+    Body JSON:
+    {
+      "tema_preferido": "crime bizarro | mistério histórico | anomalia | ...",
+      "channel_id": "id do canal destino (opcional)",
+      "auto_publish": true/false,
+      "usar_elevenlabs": false/true (requer API key, pago),
+      "gerar_imagens_midjourney": false/true (requer API key, pago)
+    }
+    """
+    
+    if not _HAS_S7EVEN:
+        return jsonify({
+            "erro": "S7even AI não disponível",
+            "mensagem": "O módulo s7even_ai não foi encontrado. Verifica se está instalado."
+        }), 500
+    
+    data = request.json or {}
+    tema = data.get("tema_preferido", "mistério histórico").strip()
+    channel_id = data.get("channel_id") or None
+    auto_publish = bool(data.get("auto_publish", False))
+    usar_elevenlabs = bool(data.get("usar_elevenlabs", False))
+    gerar_midjourney = bool(data.get("gerar_imagens_midjourney", False))
+    
+    logging.info(f"🎬 Novo S7even video solicitado:")
+    logging.info(f"   Tema: {tema}")
+    logging.info(f"   Canal: {channel_id or 'padrão'}")
+    logging.info(f"   TTS: {'ElevenLabs' if usar_elevenlabs else 'gTTS/pyttsx3 (gratuito)'}")
+    
+    try:
+        # Criar vídeo S7even (pipeline completa)
+        resultado = s7even_ai.criar_video_s7even(
+            tema_preferido=tema,
+            usar_elevenlabs=usar_elevenlabs,
+            gerar_imagens_midjourney=gerar_midjourney
+        )
+        
+        if not resultado.get("sucesso"):
+            logging.error(f"❌ Erro ao criar S7even video: {resultado.get('erro')}")
+            return jsonify({
+                "sucesso": False,
+                "erro": resultado.get("erro", "Erro desconhecido"),
+                "timestamp": resultado.get("tempo_criacao")
+            }), 500
+        
+        # Criar item na queue para processar/publicar o vídeo
+        arquivo_spec = resultado.get("arquivo_spec")
+        titulo_video = resultado.get("titulo")
+        
+        # Adicionar à queue para edição/publicação
+        item = db.add_to_queue(
+            url=f"s7even://{arquivo_spec}",  # URL especial para identificar videos S7even
+            title=titulo_video or "S7even Documentary",
+            channel_id=channel_id,
+            auto_publish=auto_publish
+        )
+        
+        # Adicionar metadados S7even
+        db.update_queue_item(item["id"],
+            s7even_spec_file=arquivo_spec,
+            s7even_historia_json=json.dumps(resultado.get("historia", {})),
+            content_type="s7even"
+        )
+        
+        # Log de sucesso
+        logging.info(f"✅ S7even video criado e adicionado à queue:")
+        logging.info(f"   ID: {item['id']}")
+        logging.info(f"   Título: {titulo_video}")
+        logging.info(f"   Spec: {arquivo_spec}")
+        
+        return jsonify({
+            "sucesso": True,
+            "video": resultado,
+            "queue_item_id": item["id"],
+            "queue_item": item,
+            "mensagem": f"Vídeo S7even '{titulo_video}' criado e adicionado à queue!"
+        }), 201
+    
+    except Exception as e:
+        logging.exception("❌ Erro na criação de S7even video:")
+        return jsonify({
+            "sucesso": False,
+            "erro": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+
+@app.route("/api/s7even", methods=["GET"])
+def api_get_s7even_videos():
+    """Lista todos os vídeos S7even criados (da queue)."""
+    try:
+        queue = db.get_queue()
+        s7even_items = [
+            q for q in queue
+            if q.get("url", "").startswith("s7even://") or q.get("content_type") == "s7even"
+        ]
+        
+        return jsonify({
+            "sucesso": True,
+            "total": len(s7even_items),
+            "videos": s7even_items
+        })
+    except Exception as e:
+        return jsonify({"sucesso": False, "erro": str(e)}), 500
+
+
+@app.route("/api/s7even/<video_id>", methods=["GET"])
+def api_get_s7even_video_detail(video_id):
+    """Obtém detalhes de um vídeo S7even específico."""
+    try:
+        queue = db.get_queue()
+        video = None
+        for q in queue:
+            if q.get("id") == video_id and (q.get("url", "").startswith("s7even://") or q.get("content_type") == "s7even"):
+                video = q
+                break
+        
+        if not video:
+            return jsonify({"erro": "Vídeo S7even não encontrado"}), 404
+        
+        # Carregar história se existir
+        historia_json = video.get("s7even_historia_json")
+        if historia_json:
+            try:
+                historia = json.loads(historia_json)
+            except:
+                historia = {}
+        else:
+            historia = {}
+        
+        return jsonify({
+            "sucesso": True,
+            "video": video,
+            "historia": historia
+        })
+    except Exception as e:
+        return jsonify({"sucesso": False, "erro": str(e)}), 500
+
+
+@app.route("/api/s7even/<video_id>/publish", methods=["POST"])
+def api_publish_s7even_video(video_id):
+    """Inicia o processamento e publicação de um vídeo S7even."""
+    try:
+        data = request.json or {}
+        channel_id = data.get("channel_id")
+        auto_publish = bool(data.get("auto_publish", False))
+        
+        # Atualizar item na queue
+        item = db.update_queue_item(
+            video_id,
+            auto_publish=auto_publish,
+            channel_id=channel_id
+        )
+        
+        if item:
+            logging.info(f"📤 S7even video marcado para publicação: {video_id}")
+            return jsonify({
+                "sucesso": True,
+                "mensagem": "Vídeo marcado para processamento e publicação",
+                "item": item
+            })
+        
+        return jsonify({"sucesso": False, "erro": "Vídeo não encontrado"}), 404
+    
+    except Exception as e:
+        logging.exception("Erro ao marcar S7even para publicação:")
+        return jsonify({"sucesso": False, "erro": str(e)}), 500
 
 
 if __name__ == "__main__":
