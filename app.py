@@ -282,7 +282,7 @@ def _get_youtube_service(credentials_path, token_path=None):
                 logs.append("  2. Seleciona o projeto 'ClipAI'")
                 logs.append("  3. Vai a 'APIs & Services' → 'OAuth consent screen'")
                 logs.append("  4. Na secção 'Test users', clica em '+ Add Users'")
-                logs.append("  5. Adiciona o teu email (ex: tomasmaga115@gmail.com)")
+                logs.append("  5. Adiciona o email da conta que vai autenticar")
                 logs.append("  6. Guarda e tenta novamente")
                 logs.append("")
                 logs.append("→ Alternativa: publica a app (muda de 'Testing' para 'In Production')")

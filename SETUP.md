@@ -1,11 +1,11 @@
-# ClipperAI Setup Guide
+# ClipAI Setup Guide
 
 ## Prerequisites Checklist
 
 - [ ] Python 3.9 or later installed (`python --version`)
 - [ ] pip package manager working (`pip --version`)
 - [ ] Git installed (`git --version`)
-- [ ] FFmpeg installed and in PATH (`ffmpeg -version`)
+- [ ] FFmpeg installed and available in PATH (`ffmpeg -version`)
 - [ ] At least 4GB RAM available
 - [ ] Internet connection for initial downloads
 
@@ -20,12 +20,10 @@
 
 ### Windows
 
-1. Download from https://ffmpeg.org/download.html (Windows builds)
-2. Extract to a folder (e.g., `C:\ffmpeg`)
-3. Add to PATH:
-   - Open System Properties → Environment Variables
-   - Add `C:\ffmpeg\bin` to your PATH
-   - Restart terminal and verify: `ffmpeg -version`
+1. Download from https://ffmpeg.org/download.html
+2. Extract to a folder such as `C:\ffmpeg`
+3. Add `C:\ffmpeg\bin` to your PATH
+4. Restart your terminal and verify with `ffmpeg -version`
 
 ### macOS
 
@@ -46,37 +44,32 @@ ffmpeg -version
 ## Step 2: Install Ollama
 
 1. Go to https://ollama.ai
-2. Download the installer for your OS
-3. Run the installer
-4. Verify installation:
+2. Install Ollama for your OS
+3. Verify installation:
 
 ```bash
 ollama --version
 ```
 
-5. Pull the Llama 2 model:
+4. Pull a local model:
 
 ```bash
-ollama pull llama2
+ollama pull llama3.1
 ```
 
-This may take 5-10 minutes depending on internet speed. The model is ~4GB.
-
-6. Verify the model is available:
+5. Confirm it is available:
 
 ```bash
 ollama list
 ```
 
-You should see `llama2` in the list.
-
 ---
 
-## Step 3: Clone and Setup ClipperAI
+## Step 3: Clone and Setup ClipAI
 
 ```bash
-git clone https://github.com/2mas-magalhaes/ClipperAI.git
-cd ClipperAI
+git clone https://github.com/<your-username>/ClipAI.git
+cd ClipAI
 ```
 
 Create a Python virtual environment:
@@ -85,14 +78,16 @@ Create a Python virtual environment:
 python -m venv .venv
 ```
 
-Activate the virtual environment:
+Activate the virtual environment.
 
-**Windows:**
-```bash
-.venv\Scripts\activate
+Windows:
+
+```powershell
+.\.venv\Scripts\activate
 ```
 
-**macOS/Linux:**
+macOS/Linux:
+
 ```bash
 source .venv/bin/activate
 ```
@@ -105,44 +100,51 @@ pip install -r requirements.txt
 
 ---
 
-## Step 4: Configure Environment (Optional)
+## Step 4: Configure Environment
 
-Copy `.env.example` to `.env`:
+Copy the example file:
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` with your settings:
+Adjust local settings as needed:
 
 ```bash
-# Set to false if you don't have a GPU
 USE_GPU=true
-
-# Model settings (change to your preferred model)
-OLLAMA_MODEL=llama2
+OLLAMA_MODEL=llama3.1
 WHISPER_MODEL=base
 ```
+
+If you want credential rotation for multiple Google OAuth apps, set:
+
+```bash
+GOOGLE_CREDENTIALS_FILES=credentials/app1.json;credentials/app2.json
+```
+
+On macOS/Linux, separate multiple paths with `:` instead of `;`.
 
 ---
 
 ## Step 5: Verify GPU Support (Optional)
 
-Run the GPU verification script:
+GPU is optional. The pipeline works on CPU too, only slower.
+
+Quick check:
 
 ```bash
-python verificar_gpu.py
+python -c "import torch; print(torch.cuda.is_available())"
 ```
 
-**Output:**
-- If GPU is available, you'll see NVIDIA GPU info and CUDA version
-- If no GPU, it will show CPU fallback is active
+If you have NVIDIA drivers installed, you can also run:
 
-GPU is optional. The pipeline will work on CPU, just slower.
+```bash
+nvidia-smi
+```
 
 ---
 
-## Step 6: Run ClipperAI
+## Step 6: Run ClipAI
 
 Ensure Ollama is running in another terminal:
 
@@ -150,7 +152,13 @@ Ensure Ollama is running in another terminal:
 ollama serve
 ```
 
-Then run the main pipeline:
+Run the web application:
+
+```powershell
+$env:PYTHONIOENCODING = "utf-8"; .\.venv\Scripts\python.exe app.py
+```
+
+Or run the direct pipeline:
 
 ```bash
 python main.py
@@ -160,109 +168,56 @@ python main.py
 
 ## Project Structure
 
-```
-ClipperAI/
-├── README.md
-├── SETUP.md
-├── requirements.txt
-├── .env.example
-├── .env (your local config)
-├── main.py
-├── modulo1_download.py
-├── modulo2_analise.py
-├── modulo3_edicao.py
-├── modulo4_publicacao.py (planned)
-├── modulo5_feedback.py (planned)
-├── verificar_gpu.py
-├── downloads/
-├── audio/
-├── video/
-└── output/
+```text
+ClipAI/
+|-- README.md
+|-- SETUP.md
+|-- requirements.txt
+|-- .env.example
+|-- .env                  # local only, do not commit
+|-- app.py
+|-- worker.py
+|-- database.py
+|-- modulo1_download.py
+|-- modulo2_analise.py
+|-- modulo3_edicao.py
+|-- downloads/            # generated media
+`-- data/                 # local app state
 ```
 
 ---
 
 ## Common Issues
 
-### Issue: "ffmpeg not found"
+### Issue: `ffmpeg not found`
 
-**Solution:**
-- Verify FFmpeg is installed: `ffmpeg -version`
+- Confirm FFmpeg is installed with `ffmpeg -version`
 - Make sure FFmpeg is in your system PATH
-- On Windows, restart your terminal after adding to PATH
+- On Windows, restart the terminal after editing PATH
 
-### Issue: "ollama pull llama2" fails
+### Issue: `ollama pull` fails
 
-**Solution:**
-- Make sure Ollama is installed: `ollama --version`
-- Check internet connection
-- Try again: `ollama pull llama2`
-- If still fails, try a smaller model first: `ollama pull mistral`
+- Confirm Ollama is installed with `ollama --version`
+- Check your internet connection
+- Try another model such as `mistral`
 
-### Issue: "CUDA not found" or GPU not detected
+### Issue: GPU not detected
 
-**Solution:**
-- GPU is optional. CPU fallback is automatic.
-- To use GPU, ensure you have:
-  - NVIDIA GPU (RTX/GTX series)
-  - CUDA Toolkit installed
-  - cuDNN installed
-- Run `nvidia-smi` to check GPU
-- If not available, set `USE_GPU=false` in .env
+- CPU fallback is supported automatically
+- If you want GPU acceleration, confirm `nvidia-smi` works
+- If needed, set `USE_GPU=false` in `.env`
 
-### Issue: "Out of memory" or "CUDA out of memory"
+### Issue: Python module not found
 
-**Solution:**
-- Reduce model size: Use `whisper.tiny` or `whisper.small` instead of `base`
-- Reduce video resolution
-- Close other applications
-- If using GPU, reduce batch size in configuration
-
-### Issue: "Python module not found"
-
-**Solution:**
-- Make sure virtual environment is activated
-- Verify requirements are installed: `pip install -r requirements.txt`
-- Check Python version: `python --version` (should be 3.9+)
-
----
-
-## Performance Tips
-
-### For Faster Transcription
-
-1. Use GPU if available: `USE_GPU=true`
-2. Use smaller Whisper model: `WHISPER_MODEL=tiny` or `WHISPER_MODEL=small`
-3. Lower sample rate if acceptable
-
-### For Faster LLM Analysis
-
-1. Use smaller model: `ollama pull mistral` (faster than llama2)
-2. Set shorter timeout: `OLLAMA_TIMEOUT=120`
-
-### For Faster Overall Pipeline
-
-1. Download video at lower resolution
-2. Use GPU acceleration
-3. Run on a machine with at least 8GB RAM
+- Make sure the virtual environment is active
+- Reinstall dependencies with `pip install -r requirements.txt`
+- Confirm Python 3.9+ with `python --version`
 
 ---
 
 ## Next Steps
 
-1. Run your first video analysis
-2. Check the output in `output/`
-3. Review identified clip timestamps
-4. Experiment with different models and settings
-5. Read the main README.md for architecture details
-
----
-
-## Troubleshooting
-
-For additional help:
-
-1. Check the main README.md for project architecture
-2. Review the module docstrings in Python files
-3. Check Ollama documentation: https://ollama.ai
-4. Check Faster-Whisper documentation: https://github.com/SYSTRAN/faster-whisper
+1. Start the web app.
+2. Add a source video to the queue.
+3. Review the generated clips in `downloads/`.
+4. Configure a YouTube channel only on your local machine when you need publishing.

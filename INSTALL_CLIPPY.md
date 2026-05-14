@@ -204,7 +204,7 @@ brew install ffmpeg
 **Otimizações:**
 
 1. **Use GPU** (se disponível):
-   - Verifique: `python verificar_gpu.py`
+   - Verifique: `python -c "import torch; print(torch.cuda.is_available())"`
    - FFmpeg usará automaticamente GPU NVIDIA
 
 2. **Reduza qualidade** (se necessário):

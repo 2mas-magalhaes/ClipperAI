@@ -1,20 +1,49 @@
 """
-Sistema de rotação automática de credenciais Google OAuth quando quota é excedida.
-Permite múltiplas contas YouTube com ciclo automático.
+Sistema de rotacao automatica de credenciais Google OAuth quando quota e excedida.
+Permite multiplas contas YouTube com ciclo automatico sem hardcodes locais.
 """
 
-import os
+import glob
 import json
 import logging
-from pathlib import Path
+import os
 
 ROTATION_STATE_FILE = os.path.join("data", "credentials_rotation.json")
+GOOGLE_CREDENTIALS_ENV = "GOOGLE_CREDENTIALS_FILES"
+DEFAULT_CREDENTIAL_PATTERNS = (
+    "client_secret_*.json",
+    "credentials/*.json",
+    "secrets/*.json",
+)
 
-# Lista de credentials (em ordem de rotação)
-CREDENTIALS_LIST = [
-    "client_secret_323729487453-eubmo81fr4ac8sedtf3fan61ibqb1i49.apps.googleusercontent.com.json",  # Novo
-    "client_secret_856036187225-80u8fna6cdjm2oqbr2q4rtcopdjjeet1.apps.googleusercontent.com.json",  # Antigo
-]
+
+def _discover_credentials():
+    """Descobre ficheiros de credenciais a partir de env var ou patterns locais."""
+    configured = os.getenv(GOOGLE_CREDENTIALS_ENV, "").strip()
+    items = []
+
+    if configured:
+        normalized = configured.replace("\n", os.pathsep).replace(",", os.pathsep).replace(";", os.pathsep)
+        items.extend(part.strip() for part in normalized.split(os.pathsep) if part.strip())
+    else:
+        for pattern in DEFAULT_CREDENTIAL_PATTERNS:
+            items.extend(glob.glob(pattern))
+
+    resolved = []
+    seen = set()
+    for item in items:
+        candidate = os.path.normpath(item)
+        if not os.path.isfile(candidate):
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        resolved.append(candidate)
+
+    return resolved
+
+
+CREDENTIALS_LIST = _discover_credentials()
 
 
 def _credential_label(cred_filename):
@@ -48,6 +77,8 @@ def _save_rotation_state(state):
 
 def get_current_credentials():
     """Retorna o caminho do ficheiro de credentials actualmente em uso."""
+    if not CREDENTIALS_LIST:
+        return None
     state = _load_rotation_state()
     idx = state.get("current_index", 0) % len(CREDENTIALS_LIST)
     return CREDENTIALS_LIST[idx]
@@ -58,6 +89,10 @@ def rotate_credentials():
     Rota para o próximo credentials (quando quota é excedida).
     Retorna o novo caminho ou None se falharem todos.
     """
+    if len(CREDENTIALS_LIST) < 2:
+        logging.warning("Rotacao de credenciais indisponivel: menos de 2 credenciais configuradas.")
+        return get_current_credentials()
+
     state = _load_rotation_state()
     current_idx = state.get("current_index", 0)
     old_cred = CREDENTIALS_LIST[current_idx % len(CREDENTIALS_LIST)]
@@ -97,6 +132,17 @@ def _remove_token_for_credential(cred_filename):
 
 def get_rotation_status():
     """Retorna status atual da rotação."""
+    if not CREDENTIALS_LIST:
+        return {
+            "current_credentials": None,
+            "current_index": 0,
+            "total_credentials": 0,
+            "last_rotated": None,
+            "credentials_list": [],
+            "configured_via_env": bool(os.getenv(GOOGLE_CREDENTIALS_ENV, "").strip()),
+            "env_var": GOOGLE_CREDENTIALS_ENV,
+        }
+
     state = _load_rotation_state()
     current_idx = state.get("current_index", 0) % len(CREDENTIALS_LIST)
     current_cred = CREDENTIALS_LIST[current_idx]
@@ -106,6 +152,8 @@ def get_rotation_status():
         "current_index": current_idx,
         "total_credentials": len(CREDENTIALS_LIST),
         "last_rotated": state.get("last_rotated"),
+        "configured_via_env": bool(os.getenv(GOOGLE_CREDENTIALS_ENV, "").strip()),
+        "env_var": GOOGLE_CREDENTIALS_ENV,
         "credentials_list": [
             {
                 "index": i,

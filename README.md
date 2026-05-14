@@ -183,26 +183,26 @@ Additional implementation notes are documented in `AUTO_PUBLISH_LOGS.md`.
 Clone the repository:
 
 ```bash
-git clone https://github.com/2mas-magalhaes/ClipperAI.git
-cd ClipperAI
+git clone https://github.com/<your-username>/ClipAI.git
+cd ClipAI
 ```
 
 Create and activate a virtual environment:
 
 ```bash
-python -m venv venv
+python -m venv .venv
 ```
 
 Windows:
 
 ```powershell
-.\venv\Scripts\activate
+.venv\Scripts\activate
 ```
 
 macOS/Linux:
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
 Install dependencies:
@@ -222,7 +222,7 @@ ollama pull llama3.1
 Run the web application:
 
 ```powershell
-$env:PYTHONIOENCODING = "utf-8"; .\venv\Scripts\python.exe app.py
+$env:PYTHONIOENCODING = "utf-8"; .\.venv\Scripts\python.exe app.py
 ```
 
 Run the direct script pipeline:
@@ -231,13 +231,20 @@ Run the direct script pipeline:
 python main.py
 ```
 
-Run GPU diagnostics:
+## Configuration
+
+Copy the example environment file before customizing local settings:
 
 ```bash
-python verificar_gpu.py
+cp .env.example .env
 ```
 
-## Configuration
+Important local-only files that should never be committed:
+
+- `.env`
+- Google OAuth files such as `client_secret_*.json`
+- generated tokens such as `*_token.json`
+- `data/` and `downloads/`
 
 For YouTube publishing, configure a channel through the web interface and provide OAuth credentials for the YouTube Data API.
 
@@ -250,6 +257,8 @@ Recommended workflow:
 5. Add videos to the queue.
 
 If credentials are missing or upload fails, clips remain available for review and manual publishing.
+
+If you want credential rotation, set `GOOGLE_CREDENTIALS_FILES` in `.env` with multiple local credential paths separated by `;` on Windows or `:` on macOS/Linux.
 
 ## Example Programmatic Usage
 
@@ -300,4 +309,4 @@ ClipAI is intended for lawful and responsible content workflows. Users should re
 
 ## License
 
-MIT License. See `LICENSE.md` for details.
+MIT License. See `LICENSE`.

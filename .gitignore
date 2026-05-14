@@ -1,11 +1,44 @@
-/venv
-/__pycache__
-/downloads
-client_secret_856036187225-80u8fna6cdjm2oqbr2q4rtcopdjjeet1.apps.googleusercontent.com.json
-/data
-client_secret_856036187225-80u8fna6cdjm2oqbr2q4rtcopdjjeet1.apps.googleusercontent.com_token.pickle
-client_secret_856036187225-80u8fna6cdjm2oqbr2q4rtcopdjjeet1.apps.googleusercontent.com_token.json
-client_secret_856036187225-80u8fna6cdjm2oqbr2q4rtcopdjjeet1.apps.googleusercontent.com_token.json
-client_secret_856036187225-80u8fna6cdjm2oqbr2q4rtcopdjjeet1.apps.googleusercontent.com_token.json
-client_secret_323729487453-eubmo81fr4ac8sedtf3fan61ibqb1i49.apps.googleusercontent.com_token.json
-client_secret_486951480127-ve3vb8fbpqa0tm5fohugoll8f35c8gbv.apps.googleusercontent.com_token.json
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Local environment and secrets
+.env
+.env.local
+.env.*.local
+*.secret
+*.secrets
+client_secret_*.json
+*_token.json
+*_token.pickle
+
+# Local app data and generated media
+data/
+downloads/
+audio/
+video/
+output/
+*.db
+*.sqlite
+*.sqlite3
+
+# Editor and OS files
+.vscode/
+.idea/
+.qodo/
+.DS_Store
+Thumbs.db
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
