@@ -57,7 +57,6 @@ The system can be used through the web application or through the direct script 
 - Jump cuts based on speech intervals
 - Face-aware crop and tracking using OpenCV DNN with fallback support
 - Dynamic zoom, color grading, denoise, sharpening, vignette, progress bar, and loop handling
-- Optional Clippy character layer for AI-generated hook segments
 
 ### Web Workflow
 
@@ -111,7 +110,6 @@ The system can be used through the web application or through the direct script 
 | Download module | `modulo1_download.py` | Downloads source videos from YouTube using `yt-dlp`. |
 | Analysis module | `modulo2_analise.py` | Extracts audio, transcribes speech, analyzes transcripts with Ollama, and saves clip recommendations. |
 | Editing module | `modulo3_edicao.py` | Generates edited short-form clips with subtitles, vertical formatting, face-aware crop, and visual effects. |
-| Clippy module | `personagem_clippy.py` | Generates and animates the optional Clippy character layer for hook-style intros and interventions. |
 | Web application | `app.py` | Provides the interface for queue management, review, publishing, channels, OAuth, and settings. |
 | Queue worker | `worker.py` | Processes videos in the background and coordinates download, analysis, editing, and publishing. |
 | Database layer | `database.py` | Stores queue state, clip metadata, channel configuration, settings, publishing status, and YouTube results. |
@@ -281,7 +279,6 @@ Implemented:
 - automatic clip editing
 - vertical video export
 - dynamic subtitles
-- Clippy character layer
 - web interface
 - processing queue
 - background worker
