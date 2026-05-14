@@ -1,214 +1,248 @@
-# 🎬 ClipAI - Sistema Automático de Clipagem de Vídeos
+# ClipAI
 
-Uma solução **100% gratuita** e **open-source** para criar clips virais automaticamente a partir de vídeos do YouTube usando IA.
+ClipAI is an AI-assisted video automation system for processing long-form YouTube videos into short-form clips. It combines video download, local speech transcription, LLM-based clip selection, automated editing, a web-based processing queue, and YouTube publishing through OAuth.
 
----
+The project is designed as an end-to-end pipeline for experimenting with AI-assisted content workflows while keeping the core processing local and configurable.
 
-## ✨ Recursos
+## Overview
 
-- ✅ **Download automático** de vídeos do YouTube
-- ✅ **Transcrição de áudio** com Whisper (offline)
-- ✅ **Análise inteligente** com Llama 2 (offline)
-- ✅ **Edição profissional** com efeitos avançados (zoom, color grading, legendas)
-- ✅ **🆕 Personagem AI (Clippy)** - Hooks virais automáticos no início dos vídeos
-- ✅ **Zero custos** - Tudo roda localmente
-- ✅ **Aceleração GPU** - 10x mais rápido com NVIDIA CUDA
+ClipAI automates the workflow of turning a source video into edited short-form clips:
 
----
+1. Download a YouTube video.
+2. Extract and transcribe the audio locally.
+3. Analyze the transcript with a local LLM through Ollama.
+4. Select candidate segments for short-form clips.
+5. Edit the clips automatically with subtitles, vertical formatting, visual effects, and optional Clippy-generated hooks.
+6. Manage clips through a web interface and processing queue.
+7. Publish clips to YouTube using OAuth-authenticated uploads.
 
-## 🚀 Início Rápido
+## Current Capabilities
 
-### 1. Instalar Ollama (Obrigatório)
+- YouTube video download using `yt-dlp`
+- Local transcription with Faster-Whisper
+- Local LLM analysis through Ollama
+- Automated clip selection based on transcript analysis
+- Automated video editing with FFmpeg-based processing
+- Vertical 9:16 clip formatting
+- Word-by-word ASS subtitles
+- Jump cuts based on speech intervals
+- Face-aware crop and tracking using OpenCV DNN with fallback support
+- Dynamic zoom, color grading, denoise, sharpening, vignette, progress bar, and loop handling
+- Optional Clippy character layer for AI-generated hook segments
+- Web interface for queue, review, publishing, channels, and settings
+- Background worker for automated processing
+- Real YouTube publishing through OAuth
+- Upload progress logging and database updates with YouTube video URL and ID
+- Manual review fallback when automatic publishing fails
 
-```bash
-# Vá para https://ollama.ai e baixe o instalador Windows
-# Depois baixe o modelo Llama 2
-ollama pull llama2
-```
+## Architecture
 
-### 2. Executar o Sistema
+```text
+YouTube URL
+    |
+    v
+Download module
+    |
+    v
+Audio extraction
+    |
+    v
+Faster-Whisper transcription
+    |
+    v
+Ollama LLM analysis
+    |
+    v
+Clip candidate selection
+    |
+    v
+FFmpeg editing pipeline
+    |
+    v
+Review queue / Web interface
+    |
+    v
+YouTube OAuth publishing
+Main Components
+Download Module
 
-```powershell
+File: modulo1_download.py
+
+Responsible for downloading source videos from YouTube using yt-dlp and storing them locally for processing.
+
+Analysis Module
+
+File: modulo2_analise.py
+
+Handles audio extraction, transcription with Faster-Whisper, local LLM analysis through Ollama, GPU detection, and saving the resulting clip recommendations.
+
+Editing Module
+
+File: modulo3_edicao.py
+
+Generates edited short-form clips from the recommended timestamps. The editing pipeline includes precise video cuts, jump cuts, subtitle generation, vertical formatting, face-aware cropping, visual effects, and export encoding.
+
+Clippy Character Module
+
+File: personagem_clippy.py
+
+Generates and animates an optional AI character layer used for hook-style introductions and visual interventions.
+
+Web Application
+
+File: app.py
+
+Provides the web interface for queue management, review, publishing, channel configuration, OAuth authentication, settings, and manual publishing workflows.
+
+Queue Worker
+
+File: worker.py
+
+Processes videos in the background. The worker handles download, transcription, LLM analysis, editing, review creation, automatic publishing, retry behavior, and detailed logging.
+
+Database Layer
+
+File: database.py
+
+Stores queue state, clip metadata, review status, published videos, channel configuration, settings, and YouTube publishing results.
+
+Processing Flow
+queued
+  -> downloading
+  -> analyzing
+  -> editing
+  -> review or publishing
+  -> published
+
+If automatic publishing is enabled and a valid channel/OAuth configuration exists, edited clips are uploaded directly to YouTube. If publishing fails, the clip remains available for manual review and retry.
+
+YouTube Publishing
+
+ClipAI supports real YouTube uploads through OAuth-authenticated publishing. The publishing workflow includes:
+
+channel-specific OAuth credentials
+upload credential fallback/rotation
+video metadata generation
+title, description, tags, category, and privacy settings
+scheduled publishing support
+resumable uploads with progress logging
+database update with YouTube video ID and URL
+fallback to manual review on upload failure
+
+Additional implementation notes are documented in AUTO_PUBLISH_LOGS.md.
+
+Technologies
+Area	Technology
+Language	Python
+Video download	yt-dlp
+Transcription	Faster-Whisper
+LLM analysis	Ollama with compatible local models
+Video processing	FFmpeg
+Image and face processing	OpenCV, PIL
+GPU support	PyTorch, CUDA where available
+Web application	Python web application
+Publishing	YouTube Data API, OAuth
+Storage	Local database layer
+Requirements
+Python 3.9 or later
+FFmpeg installed and available in the system path
+Ollama installed locally
+A compatible Ollama model, such as Llama 3.1 or another configured model
+Faster-Whisper dependencies
+YouTube API OAuth credentials for publishing features
+Optional NVIDIA GPU with CUDA for faster transcription and processing
+Installation
+
+Clone the repository:
+
+git clone https://github.com/2mas-magalhaes/ClipperAI.git
+cd ClipperAI
+
+Create and activate a virtual environment:
+
+python -m venv venv
+
+Windows:
+
+.\venv\Scripts\activate
+
+macOS/Linux:
+
+source venv/bin/activate
+
+Install dependencies:
+
+pip install -r requirements.txt
+
+Install and configure Ollama:
+
+ollama pull llama3.1
+Running the Application
+
+Run the web application:
+
+$env:PYTHONIOENCODING = "utf-8"; .\venv\Scripts\python.exe app.py
+
+Or run the direct script pipeline:
+
 python main.py
-```
 
-### 3. (Opcional) Ativar GPU para 10x de velocidade
+GPU diagnostics:
 
-```powershell
 python verificar_gpu.py
-```
+Configuration
 
-Se não tiver GPU, tudo roda normalmente na CPU!
+For YouTube publishing, configure a channel through the web interface and provide OAuth credentials for the YouTube Data API.
 
----
+Expected workflow:
 
-## 📊 Performance
+Add a channel in the web interface.
+Configure OAuth credentials for that channel.
+Enable automatic publishing in settings or per queue item.
+Start the worker.
+Add videos to the queue.
 
-| Recurso | CPU | GPU RTX 3090 |
-|---------|-----|---|
-| Transcrição 10 min | 3-5 min | 20-60 seg |
-| Análise IA | 2-3 min | 30-60 seg |
-| **Total** | **5-8 min** | **1-2 min** |
+If credentials are missing or upload fails, clips are kept available for review and manual publishing.
 
----
-
-## 🏗️ Arquitetura
-
-O sistema é dividido em **5 módulos**:
-
-### Módulo 1️⃣ - Download (`modulo1_download.py`)
-- Baixa vídeos do YouTube com `yt-dlp`
-- Salva em formato MP4 na melhor qualidade
-
-### Módulo 2️⃣ - Análise (`modulo2_analise.py`)
-1. **Extrai áudio** do vídeo com MoviePy
-2. **Transcreve** com Faster-Whisper (offline)
-3. **Analisa** com Llama 2 (offline)
-4. **Identifica** os 3-5 melhores clipes
-
-### Módulo 3️⃣ - Edição (`modulo3_edicao.py`)
-- Corta vídeo nos momentos recomendados
-- **🆕 Adiciona personagem Clippy com hooks virais IA**
-- Adiciona legendas animadas karaoke (word-by-word)
-- Converte para formato vertical (9:16)
-- Aplica efeitos profissionais:
-  - Jump cuts automáticos (remove silêncios)
-  - Zoom dinâmico com face tracking
-  - Color grading cinematográfico
-  - Progress bar animada
-  - Loop infinito seamless
-
-📖 **Sobre o Clippy**: Veja [CLIPPY_README.md](CLIPPY_README.md) para detalhes
-
-### Módulo 4️⃣ - Publicação (`modulo4_publicacao.py`) - *Em desenvolvimento*
-- Publica no YouTube Shorts
-- Publica no TikTok
-- Publica no Instagram Reels
-
-### Módulo 5️⃣ - Aprendizado (`modulo5_feedback.py`) - *Em desenvolvimento*
-- Coleta métricas de visualizações
-- Treina modelo com padrões de sucesso
-- Melhora recomendações ao longo do tempo
-
----
-
-## 📋 Requisitos
-
-- Python 3.9+
-- ~4GB de RAM mínimo (8GB+ recomendado)
-- Conexão com internet (para download)
-- GPU NVIDIA (opcional, mas recomendado)
-
----
-
-## 🛠️ Instalação Completa
-
-Veja [SETUP.md](SETUP.md) para:
-- ✅ Instalação passo a passo
-- ✅ Troubleshooting
-- ✅ Configuração de GPU/CUDA
-- ✅ Estrutura de pastas
-
----
-
-## 💻 Tecnologias Utilizadas
-
-| Componente | Tecnologia | Custo |
-|---|---|---|
-| Download | yt-dlp | Gratuito |
-| Transcrição | Faster-Whisper | Gratuito |
-| IA (Análise) | Llama 2 via Ollama | Gratuito |
-| Edição de Vídeo | FFmpeg + MoviePy | Gratuito |
-| Aceleração | PyTorch + CUDA | Gratuito |
-
----
-
-## 📖 Exemplos de Uso
-
-### Exemplo 1: Analisar um podcast
-
-```python
+Example Programmatic Usage
 from modulo1_download import baixar_video_youtube
 from modulo2_analise import extrair_audio_do_video, transcrever_audio_whisper, analisar_com_ollama
 
-url = "https://www.youtube.com/watch?v=seu_podcast"
-video = baixar_video_youtube(url, "podcast")
-audio = extrair_audio_do_video(video)
-transcricao = transcrever_audio_whisper(audio)
-clipes = analisar_com_ollama(transcricao)
-```
+url = "https://www.youtube.com/watch?v=example"
+video_path = baixar_video_youtube(url, "input_video")
+audio_path = extrair_audio_do_video(video_path)
+transcript = transcrever_audio_whisper(audio_path)
+clip_candidates = analisar_com_ollama(transcript)
+Project Status
 
-### Exemplo 2: Verificar GPU
+Implemented:
 
-```bash
-python verificar_gpu.py
-```
+YouTube video download
+audio extraction
+local transcription
+local LLM-based clip analysis
+automatic clip editing
+vertical video export
+dynamic subtitles
+Clippy character layer
+web interface
+processing queue
+background worker
+manual review workflow
+real YouTube upload through OAuth
+automatic publishing workflow
+upload logging and database updates
 
----
+Planned or expandable:
 
-## 🤝 Contribuindo
+support for additional local LLM models
+advanced scheduling controls
+analytics dashboard
+additional publishing targets
+Notes on Responsible Use
 
-Este projeto é open-source! Contribuições são bem-vindas:
+This project is intended for lawful and responsible content workflows. Users should respect copyright, platform terms of service, and the rights of original creators. Automated editing and publishing features should be used only with content the user owns, has permission to use, or can lawfully transform and publish.
 
-1. Implemente o Módulo 3 (Edição automática)
-2. Implemente o Módulo 4 (Publicação)
-3. Implemente o Módulo 5 (Aprendizado)
-4. Abra um Pull Request!
+License
 
----
-
-## ⚠️ Avisos Legais
-
-### Copyright
-Respeite os direitos autorais dos vídeos! Simply remixing without modification pode resultar em:
-- Banimento de canais
-- Copyright strikes do YouTube
-- Processos legais
-
-**Solução**: O Módulo 3 adiciona:
-- Legendas dinâmicas
-- Efeitos visuais
-- Música de fundo livre de direitos
-- Transformações de conteúdo
-
-Isso torna o conteúdo "derivado" e legalmente protegido.
-
-### Termos de Serviço
-Cumpra com os ToS do:
-- ✅ YouTube
-- ✅ TikTok
-- ✅ Instagram
-
----
-
-## 📞 Suporte
-
-Precisa de ajuda?
-
-1. Veja [SETUP.md](SETUP.md) para erros comuns
-2. Execute `python verificar_gpu.py` para diagnosticar
-3. Verifique se Ollama está rodando: `ollama serve`
-
----
-
-## 📊 Roadmap
-
-- [ ] Módulo 3: Edição automática de vídeos
-- [ ] Módulo 4: Publicação em redes sociais
-- [ ] Módulo 5: Sistema de feedback e aprendizado
-- [ ] Interface web (Flask/Django)
-- [ ] Suporte para mais modelos de IA
-- [ ] Agendamento automático
-- [ ] Dashboard de analytics
-
----
-
-## 📄 Licença
-
-MIT License - Veja LICENSE.md para detalhes
-
----
-
-**Desenvolvido com ❤️ para criadores de conteúdo**
-
-Criando um futuro onde a criação de conteúdo é acessível a todos. 🚀
+MIT License. See LICENSE.md for details.
