@@ -1,237 +1,268 @@
-# 🚀 SETUP - Clipadora AI (100% Gratuita)
+# ClipperAI Setup Guide
 
-Esta é a guia de instalação e configuração da Clipadora AI.
+## Prerequisites Checklist
+
+- [ ] Python 3.9 or later installed (`python --version`)
+- [ ] pip package manager working (`pip --version`)
+- [ ] Git installed (`git --version`)
+- [ ] FFmpeg installed and in PATH (`ffmpeg -version`)
+- [ ] At least 4GB RAM available
+- [ ] Internet connection for initial downloads
+
+### Optional but Recommended
+
+- [ ] NVIDIA GPU with CUDA support (`nvidia-smi`)
+- [ ] 8GB+ RAM if using GPU
 
 ---
 
-## ✅ O que já está instalado:
+## Step 1: Install FFmpeg
 
-- ✅ Python (você tem)
-- ✅ VS Code (você tem)
-- ✅ FFmpeg (instalado via yt-dlp)
-- ✅ yt-dlp (para download de vídeos)
-- ✅ Faster-Whisper (para transcrição gratuita)
-- ✅ MoviePy (para edição de vídeo)
-- ✅ Ollama (Python client)
+### Windows
 
----
+1. Download from https://ffmpeg.org/download.html (Windows builds)
+2. Extract to a folder (e.g., `C:\ffmpeg`)
+3. Add to PATH:
+   - Open System Properties → Environment Variables
+   - Add `C:\ffmpeg\bin` to your PATH
+   - Restart terminal and verify: `ffmpeg -version`
 
-## 🆕 NOVA FUNCIONALIDADE: Personagem Clippy com IA
-
-A **Clipadora AI** agora inclui uma personagem AI (clipe de papel com olhos) que:
-- 🎯 Aparece no início de cada vídeo com um hook viral
-- 🤖 Gera hooks automáticos usando IA (Ollama)
-- 🔊 Fala com voz natural (Microsoft Edge TTS)
-
-**Para usar esta funcionalidade, instale as dependências:**
+### macOS
 
 ```bash
-pip install edge-tts Pillow
+brew install ffmpeg
+ffmpeg -version
 ```
 
-📖 **Documentação completa**: Veja [CLIPPY_README.md](CLIPPY_README.md)
+### Linux (Ubuntu/Debian)
+
+```bash
+sudo apt-get install ffmpeg
+ffmpeg -version
+```
 
 ---
 
-## ⚠️ O que AINDA precisa fazer:
+## Step 2: Install Ollama
 
-### Passo 1: Instalar o Ollama (CRÍTICO)
+1. Go to https://ollama.ai
+2. Download the installer for your OS
+3. Run the installer
+4. Verify installation:
 
-O **Ollama** é o programa que roda os modelos de IA localmente. Sem ele, o script não funciona.
+```bash
+ollama --version
+```
 
-1. Vá para: **https://ollama.ai**
-2. Clique no botão para **Windows** e baixe o arquivo `.exe`
-3. Execute o instalador e siga as instruções
-4. Quando terminar, o Ollama estará rodando automaticamente em background
-
-### Passo 2: Baixar o modelo Llama 2 (Importante)
-
-Abra um **Prompt de Comando (cmd.exe)** ou **PowerShell** e DEIXE RODANDO este comando:
+5. Pull the Llama 2 model:
 
 ```bash
 ollama pull llama2
 ```
 
-Isso vai baixar o modelo Llama 2 (~4GB). Pode levar 5-10 minutos dependendo da sua internet.
+This may take 5-10 minutes depending on internet speed. The model is ~4GB.
 
-Quando terminar, você verá:
-```
-pulling manifest
-pulling 3f1d7b63c4fe...
-✓ Done
-```
-
-**NÃO FECHE ESTE TERMINAL!** Deixe ele rodando em background ou deixa aberto mesmo.
-
-### Passo 3: Ativar o Ollama
-
-O Ollama agora está rodando como um serviço em background. Você pode verificar se está tudo certo digitando (em outro terminal):
+6. Verify the model is available:
 
 ```bash
 ollama list
 ```
 
-Você deve ver algo como:
-```
-NAME             ID              SIZE      MODIFIED
-llama2:latest    abc123...       4.2GB     2 hours ago
-```
-
-⚠️ **IMPORTANTE**: Antes de executar `python main.py`, **certifique-se de que o Ollama está rodando!**
-
-Para iniciar o Ollama:
-- **Opção 1**: Abra o **Ollama Desktop** (aplicativo - você verá na barra de tarefas)
-- **Opção 2**: Abra um terminal e digite: `ollama serve`
-
-Se não fizer isso, o script vai retornar erro "Ollama não está rodando".
+You should see `llama2` in the list.
 
 ---
 
-## 🚀 Agora está pronto para testar!
+## Step 3: Clone and Setup ClipperAI
 
-Abra o VS Code e execute:
-
-```powershell
-python main.py
+```bash
+git clone https://github.com/2mas-magalhaes/ClipperAI.git
+cd ClipperAI
 ```
 
-O script vai:
-1. ✅ Baixar um vídeo do YouTube
-2. ✅ Extrair o áudio
-3. ✅ Transcrever com Faster-Whisper (pode levar 2-5 min)
-4. ✅ Analisar com Llama 2 (pode levar 2-3 min)
-5. ✅ Salvar as recomendações de clipes
+Create a Python virtual environment:
+
+```bash
+python -m venv .venv
+```
+
+Activate the virtual environment:
+
+**Windows:**
+```bash
+.venv\Scripts\activate
+```
+
+**macOS/Linux:**
+```bash
+source .venv/bin/activate
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
 
 ---
 
-## 💰 Custos
+## Step 4: Configure Environment (Optional)
 
-**ZERO REAIS!** 🎉
+Copy `.env.example` to `.env`:
 
-Tudo roda no seu computador:
-- Faster-Whisper = Gratuito (open-source)
-- Llama 2 = Gratuito (open-source)
-- yt-dlp = Gratuito (open-source)
-- MoviePy = Gratuito (open-source)
+```bash
+cp .env.example .env
+```
 
-Você até economiza usando esse setup do que usando APIs pagas!
+Edit `.env` with your settings:
+
+```bash
+# Set to false if you don't have a GPU
+USE_GPU=true
+
+# Model settings (change to your preferred model)
+OLLAMA_MODEL=llama2
+WHISPER_MODEL=base
+```
 
 ---
 
-## ⚡ (OPCIONAL) Aceleração com GPU (CUDA)
+## Step 5: Verify GPU Support (Optional)
 
-Quer transcrever vídeos **10x mais rápido**? Use sua GPU NVIDIA!
+Run the GPU verification script:
 
-### Verificar se você tem GPU NVIDIA
-
-1. Abra VS Code e execute:
-   ```powershell
-   python verificar_gpu.py
-   ```
-
-2. Você verá algo como:
-   ```
-   ✅ CUDA está DISPONÍVEL
-   GPU 0:
-      Nome: NVIDIA GeForce RTX 4090
-      Status: ✅ Funcionando
-   ```
-
-Se vir **❌ CUDA NÃO está disponível**, continue os passos abaixo.
-
-### Passo 1: Baixar e Instalar CUDA Toolkit
-
-1. Vá para: **https://developer.nvidia.com/cuda-toolkit**
-2. Clique em **"Download Now"**
-3. Escolha: **Windows** → **x86_64** → **exe (local)**
-4. Baixe e execute o instalador
-5. Siga as instruções (pode deixar tudo no padrão)
-6. **Reinicie o computador**
-
-### Passo 2: Baixar e Instalar cuDNN
-
-O cuDNN melhora a performance de ML ainda mais:
-
-1. Vá para: **https://developer.nvidia.com/cudnn**
-2. Faça login (crie uma conta se precisar)
-3. Baixe a versão mais recente para **Windows x86_64**
-4. Descompacte o arquivo
-5. Copie os arquivos para sua pasta CUDA:
-   - `cuda/bin/*` → `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\bin`
-   - `cuda/lib/*` → `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\lib`
-   - `cuda/include/*` → `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\include`
-
-### Passo 3: Verificar Instalação
-
-```powershell
-nvcc --version
-```
-
-Você deve ver algo como:
-```
-nvcc: NVIDIA (R) Cuda compiler driver
-Cuda compilation tools, release 12.1
-```
-
-### Passo 4: Testar Performance
-
-Execute:
-```powershell
+```bash
 python verificar_gpu.py
 ```
 
-Se tudo estiver certo, você verá ✅ em tudo!
+**Output:**
+- If GPU is available, you'll see NVIDIA GPU info and CUDA version
+- If no GPU, it will show CPU fallback is active
+
+GPU is optional. The pipeline will work on CPU, just slower.
 
 ---
 
-## ⏱️ Comparação de Performance
+## Step 6: Run ClipperAI
 
-| Task | CPU | GPU (RTX 3090) | Speedup |
-|------|-----|---|---|
-| Transcrição 10 min | 3-5 min | 20-60 seg | **5-15x** ⚡ |
-| Análise (Llama) | 2-3 min | 30-60 seg | **5-6x** ⚡ |
-| **Total** | **5-8 min** | **1-2 min** | **5-8x** ⚡ |
+Ensure Ollama is running in another terminal:
 
----
-
-💡 **Dica**: Se você não tem GPU NVIDIA, a versão CPU funciona perfeitamente! Apenas um pouco mais lenta.
-
----
-
-## 🆘 Troubleshooting
-
-### Erro: "ModuleNotFoundError: No module named 'ollama'"
-✅ Solução: Você já tem instalado. Verifique se o Ollama desktop está realmente rodando.
-
-### Erro: "Connection refused" ou "OLLAMA_HOST"
-⚠️ Significa que o Ollama não está rodando:
-1. Abra o **Ollama Desktop** (veja na sua barra de tarefas/aplicações)
-2. Ou abra um terminal e digite: `ollama serve`
-
-### Erro: "model 'llama2' not found"
-⚠️ Significa que não baixou o modelo:
-1. Abra um terminal
-2. Digite: `ollama pull llama2`
-3. Espere terminar
-
----
-
-## 📁 Estrutura do Projeto
-
+```bash
+ollama serve
 ```
-ClipAI/
-├── downloads/              # Vídeos baixados aqui
-├── .env                    # Configurações (sem API keys!)
-├── main.py                 # Script principal
-├── modulo1_download.py     # Baixa vídeos do YouTube
-├── modulo2_analise.py      # Transcreve + Analisa com IA
-├── modulo3_edicao.py       # (Próximo) Corta e edita vídeos
-├── modulo4_publicacao.py   # (Próximo) Publica em redes
-├── verificar_gpu.py        # Diagnostica GPU/CUDA (execute: python verificar_gpu.py)
-├── SETUP.md                # Este arquivo
-└── README.md               # (Próximo) Documentação completa
+
+Then run the main pipeline:
+
+```bash
+python main.py
 ```
 
 ---
 
-Pronto! Agora você tem tudo configurado! 🚀
+## Project Structure
+
+```
+ClipperAI/
+├── README.md
+├── SETUP.md
+├── requirements.txt
+├── .env.example
+├── .env (your local config)
+├── main.py
+├── modulo1_download.py
+├── modulo2_analise.py
+├── modulo3_edicao.py
+├── modulo4_publicacao.py (planned)
+├── modulo5_feedback.py (planned)
+├── verificar_gpu.py
+├── downloads/
+├── audio/
+├── video/
+└── output/
+```
+
+---
+
+## Common Issues
+
+### Issue: "ffmpeg not found"
+
+**Solution:**
+- Verify FFmpeg is installed: `ffmpeg -version`
+- Make sure FFmpeg is in your system PATH
+- On Windows, restart your terminal after adding to PATH
+
+### Issue: "ollama pull llama2" fails
+
+**Solution:**
+- Make sure Ollama is installed: `ollama --version`
+- Check internet connection
+- Try again: `ollama pull llama2`
+- If still fails, try a smaller model first: `ollama pull mistral`
+
+### Issue: "CUDA not found" or GPU not detected
+
+**Solution:**
+- GPU is optional. CPU fallback is automatic.
+- To use GPU, ensure you have:
+  - NVIDIA GPU (RTX/GTX series)
+  - CUDA Toolkit installed
+  - cuDNN installed
+- Run `nvidia-smi` to check GPU
+- If not available, set `USE_GPU=false` in .env
+
+### Issue: "Out of memory" or "CUDA out of memory"
+
+**Solution:**
+- Reduce model size: Use `whisper.tiny` or `whisper.small` instead of `base`
+- Reduce video resolution
+- Close other applications
+- If using GPU, reduce batch size in configuration
+
+### Issue: "Python module not found"
+
+**Solution:**
+- Make sure virtual environment is activated
+- Verify requirements are installed: `pip install -r requirements.txt`
+- Check Python version: `python --version` (should be 3.9+)
+
+---
+
+## Performance Tips
+
+### For Faster Transcription
+
+1. Use GPU if available: `USE_GPU=true`
+2. Use smaller Whisper model: `WHISPER_MODEL=tiny` or `WHISPER_MODEL=small`
+3. Lower sample rate if acceptable
+
+### For Faster LLM Analysis
+
+1. Use smaller model: `ollama pull mistral` (faster than llama2)
+2. Set shorter timeout: `OLLAMA_TIMEOUT=120`
+
+### For Faster Overall Pipeline
+
+1. Download video at lower resolution
+2. Use GPU acceleration
+3. Run on a machine with at least 8GB RAM
+
+---
+
+## Next Steps
+
+1. Run your first video analysis
+2. Check the output in `output/`
+3. Review identified clip timestamps
+4. Experiment with different models and settings
+5. Read the main README.md for architecture details
+
+---
+
+## Troubleshooting
+
+For additional help:
+
+1. Check the main README.md for project architecture
+2. Review the module docstrings in Python files
+3. Check Ollama documentation: https://ollama.ai
+4. Check Faster-Whisper documentation: https://github.com/SYSTRAN/faster-whisper
