@@ -6,6 +6,9 @@ Flask app com dashboard, queue de vídeos, gestão de canais e definições.
 import os
 import sys
 import logging
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Garantir que o venv correto é usado
 VENV_PYTHON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "venv", "Scripts", "python.exe")

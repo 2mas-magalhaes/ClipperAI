@@ -7,6 +7,9 @@ import time as _time
 import requests as _requests
 import io
 import sys
+from dotenv import load_dotenv
+
+load_dotenv()
 
 try:
     from proxy_rotator import get_proxy, remove_bad_proxy, apply_proxy_to_opts, refresh_proxies
@@ -270,7 +273,7 @@ def _baixar_com_pytube(url_video, caminho_saida):
 #  FALLBACK: RapidAPI YouTube Downloader
 # ═══════════════════════════════════════════════════════════
 
-_RAPIDAPI_KEY = "553b0439a7msha08d0d54f29251ep190392jsnf631ab1e063a"
+_RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "").strip()
 _RAPIDAPI_HOST = "yt-video-audio-downloader-api.p.rapidapi.com"
 _RAPIDAPI_BASE = f"https://{_RAPIDAPI_HOST}"
 
@@ -282,6 +285,10 @@ def _baixar_com_rapidapi(url_video, caminho_saida, quality=1080, progress_callba
     Returns:
         bool: True se sucesso, False se falhar.
     """
+    if not _RAPIDAPI_KEY:
+        print("  RapidAPI: fallback indisponivel (RAPIDAPI_KEY nao configurada)")
+        return False
+
     UA_BROWSER = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     
     headers = {

@@ -1,25 +1,33 @@
-# ClipAI - Dependências Python
-# Instale com: pip install -r requirements.txt
+# ClipAI Python dependencies
+# Install with: python -m pip install -r requirements.txt
 
-# Processamento de Vídeo e Áudio
+# Web application
+Flask>=3.0.0
+
+# Video and audio processing
 yt-dlp>=2023.11.16
 moviepy>=1.0.3
 opencv-python>=4.8.0
 
-# IA e Machine Learning
+# AI and machine learning
 faster-whisper>=0.9.0
 torch>=2.0.0
 ollama>=0.1.6
 
-# Processamento de Imagem (para personagem Clippy)
+# Image processing and Clippy character rendering
 Pillow>=10.0.0
 
-# Text-to-Speech (para voz do Clippy)
+# Text-to-speech
 edge-tts>=6.1.9
 
-# Utilitários
+# Google / YouTube publishing
+google-api-python-client>=2.0.0
+google-auth>=2.0.0
+google-auth-oauthlib>=1.0.0
+
+# Utilities
 python-dotenv>=1.0.0
 requests>=2.31.0
 
-# Opcional: para melhor performance GPU
-# nvidia-cudnn-cu11>=8.6.0  # Descomentar se tiver GPU NVIDIA
+# Optional GPU performance dependency for some NVIDIA setups:
+# nvidia-cudnn-cu11>=8.6.0
