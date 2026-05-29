@@ -1,312 +1,295 @@
 # ClipAI
 
-AI-assisted video automation system for turning long-form YouTube videos into short-form clips.
+![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)
+![Flask](https://img.shields.io/badge/Flask-Web%20Dashboard-000000?logo=flask&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green)
+![Status](https://img.shields.io/badge/Status-Local%20Automation-blue)
 
-ClipAI combines video download, local speech transcription, LLM-based clip selection, automated editing, a web processing queue, and YouTube publishing through OAuth.
+ClipAI is a local AI-assisted video automation system for turning long-form YouTube videos into short-form clips. It combines downloading, transcription, local LLM analysis, automated editing, a review dashboard, and optional YouTube publishing.
 
-## ✨ Highlights
+## Preview
 
-- End-to-end pipeline from YouTube video to edited short-form clips
-- Local transcription with Faster-Whisper
-- Local LLM analysis through Ollama
-- Automated vertical video editing with subtitles and visual effects
-- Web interface for queue, review, publishing, channels, and settings
-- Background worker for automated processing
-- Real YouTube publishing through OAuth-authenticated uploads
-- Manual review fallback when automatic publishing fails
+![ClipAI dashboard](docs/assets/screenshots/home.png)
+
+Additional demo assets can be added here:
+
+| Type | Path | Notes |
+| --- | --- | --- |
+| Screenshots | `docs/assets/screenshots/` | Real dashboard screenshot currently available as `home.png`. |
+| GIFs | `docs/assets/gifs/` | Add short workflow GIFs when a stable demo dataset is available. |
+| Videos | `docs/assets/videos/` | Add short MP4/WebM demos for queue processing or publishing flows. |
 
 ## Overview
 
-ClipAI automates the workflow of processing a source video into ready-to-publish short-form clips.
+ClipAI automates the workflow of converting source videos into short-form clips:
 
 ```text
-YouTube video
-    -> Download
-    -> Audio extraction
-    -> Transcription
-    -> LLM analysis
-    -> Clip selection
-    -> Automated editing
-    -> Review queue
-    -> YouTube publishing
+YouTube URL or local video
+  -> download / ingest
+  -> audio extraction
+  -> speech transcription
+  -> local LLM clip analysis
+  -> automated vertical editing
+  -> review queue
+  -> optional YouTube publishing
 ```
 
-The system can be used through the web application or through the direct script pipeline.
+The project is designed for local execution. It uses local files for runtime state, generated media, and OAuth tokens, so private configuration must stay outside Git.
 
-## 🚀 Core Features
+## Features
 
-### Video Processing
+- Web dashboard for queue management, channels, schedules, review, and settings.
+- YouTube video download via `yt-dlp`, with proxy support and an optional RapidAPI fallback.
+- Local transcription with Faster-Whisper.
+- Local clip selection and metadata generation through Ollama.
+- Automated vertical video editing with FFmpeg/OpenCV, subtitles, dynamic crop/zoom, and loop handling.
+- Review workflow for generated clips before publishing.
+- Optional YouTube Data API publishing with OAuth and credential rotation.
+- Local JSON database for queues, channels, review clips, posted videos, and scheduler state.
+- "Clippy" character utilities for animated hooks, voice, and interventions.
 
-- YouTube video download using `yt-dlp`
-- Audio extraction from downloaded videos
-- Local speech transcription using Faster-Whisper
-- GPU-aware execution when CUDA is available
-
-### AI Analysis
-
-- Transcript analysis using a local LLM through Ollama
-- Configurable Ollama model support
-- Automatic identification of candidate clip segments
-- Metadata generation for clips and publishing workflows
-
-### Automated Editing
-
-- Precise clip cutting with FFmpeg
-- Vertical 9:16 formatting for short-form platforms
-- Word-by-word ASS subtitles
-- Jump cuts based on speech intervals
-- Face-aware crop and tracking using OpenCV DNN with fallback support
-- Dynamic zoom, color grading, denoise, sharpening, vignette, progress bar, and loop handling
-
-### Web Workflow
-
-- Queue-based video processing
-- Background worker execution
-- Review workflow for generated clips
-- Channel and publishing configuration
-- Manual and automatic publishing modes
-- Upload logs and status tracking
-
-### YouTube Publishing
-
-- Real YouTube uploads through OAuth
-- Channel-specific credentials
-- Credential fallback/rotation support
-- Title, description, tags, category, and privacy configuration
-- Scheduled publishing support
-- Resumable uploads with progress logging
-- Database updates with YouTube video ID and URL
-
-## 🏗️ Architecture
-
-```text
-                         +-------------------+
-                         |   Web Interface   |
-                         |      app.py       |
-                         +---------+---------+
-                                   |
-                                   v
-+-------------+          +---------+---------+          +----------------+
-| YouTube URL |--------->|   Queue Worker    |--------->| Review/Publish |
-+-------------+          |     worker.py     |          +----------------+
-                         +---------+---------+
-                                   |
-        +--------------------------+--------------------------+
-        |                          |                          |
-        v                          v                          v
-+---------------+        +-------------------+        +----------------+
-| Download      |        | Analysis          |        | Editing        |
-| modulo1       |        | modulo2           |        | modulo3        |
-+---------------+        +-------------------+        +----------------+
-        |                          |                          |
-        v                          v                          v
- yt-dlp download          Whisper + Ollama             FFmpeg pipeline
-```
-
-## Main Components
-
-| Component | File | Responsibility |
-| --- | --- | --- |
-| Download module | `modulo1_download.py` | Downloads source videos from YouTube using `yt-dlp`. |
-| Analysis module | `modulo2_analise.py` | Extracts audio, transcribes speech, analyzes transcripts with Ollama, and saves clip recommendations. |
-| Editing module | `modulo3_edicao.py` | Generates edited short-form clips with subtitles, vertical formatting, face-aware crop, and visual effects. |
-| Web application | `app.py` | Provides the interface for queue management, review, publishing, channels, OAuth, and settings. |
-| Queue worker | `worker.py` | Processes videos in the background and coordinates download, analysis, editing, and publishing. |
-| Database layer | `database.py` | Stores queue state, clip metadata, channel configuration, settings, publishing status, and YouTube results. |
-
-## Processing Flow
-
-```text
-queued
-  -> downloading
-  -> analyzing
-  -> editing
-  -> review or publishing
-  -> published
-```
-
-If automatic publishing is enabled and a valid channel/OAuth configuration exists, edited clips are uploaded directly to YouTube. If publishing fails, the clip remains available for manual review and retry.
-
-## 🧠 AI Workflow
-
-ClipAI uses AI in two main stages:
-
-1. **Transcription:** Faster-Whisper converts the video audio into timestamped text.
-2. **Clip analysis:** A local Ollama model analyzes the transcript and recommends short-form clip candidates.
-
-The goal is to keep the analysis workflow local, configurable, and independent from paid API requirements.
-
-## YouTube Publishing
-
-ClipAI supports real YouTube uploads through OAuth-authenticated publishing.
-
-The publishing workflow includes:
-
-- channel-specific OAuth credentials
-- upload credential fallback/rotation
-- video metadata generation
-- title, description, tags, category, and privacy settings
-- scheduled publishing support
-- resumable uploads with progress logging
-- database update with YouTube video ID and URL
-- fallback to manual review on upload failure
-
-Additional implementation notes are documented in `AUTO_PUBLISH_LOGS.md`.
-
-## Technologies
+## Tech Stack
 
 | Area | Technology |
 | --- | --- |
-| Language | Python |
-| Video download | yt-dlp |
+| Language | Python 3.9+ |
+| Web app | Flask, Jinja templates, vanilla JavaScript, CSS |
+| Video download | `yt-dlp`, optional RapidAPI fallback |
 | Transcription | Faster-Whisper |
-| LLM analysis | Ollama with compatible local models |
-| Video processing | FFmpeg |
-| Image and face processing | OpenCV, PIL |
-| GPU support | PyTorch, CUDA where available |
-| Web application | Python web application |
-| Publishing | YouTube Data API, OAuth |
-| Storage | Local database layer |
+| LLM analysis | Ollama |
+| Video processing | FFmpeg, FFprobe, MoviePy, OpenCV |
+| Image / TTS | Pillow, edge-tts |
+| Publishing | Google API Python Client, YouTube Data API OAuth |
+| Storage | Local JSON database under `data/` |
 
-## Requirements
+## Architecture / Project Structure
 
-- Python 3.9 or later
-- FFmpeg installed and available in the system path
-- Ollama installed locally
-- A compatible Ollama model, such as Llama 3.1 or another configured model
-- Faster-Whisper dependencies
-- YouTube API OAuth credentials for publishing features
-- Optional NVIDIA GPU with CUDA for faster transcription and processing
+```text
+.
+|-- app.py                    # Flask web dashboard and HTTP API
+|-- worker.py                 # Background queue worker
+|-- database.py               # Local JSON persistence layer
+|-- modulo1_download.py       # YouTube/local video ingestion
+|-- modulo2_analise.py        # Audio extraction, Whisper, Ollama analysis
+|-- modulo3_edicao.py         # FFmpeg/OpenCV editing pipeline
+|-- personagem_clippy.py      # Clippy character rendering, TTS, hooks
+|-- credentials_rotation.py   # Google OAuth credential discovery/rotation
+|-- proxy_rotator.py          # Public proxy discovery and rotation helpers
+|-- auto_manager.py           # Playlist/channel auto-scan manager
+|-- templates/index.html      # Dashboard shell
+|-- static/app.js             # Dashboard client logic
+|-- static/style.css          # Dashboard styling
+|-- docs/assets/              # Screenshots, GIFs, and videos for docs
+|-- test_*.py                 # Script-style smoke/manual tests
+|-- requirements.txt          # Python dependencies
+|-- .env.example              # Safe environment variable template
+```
+
+## Getting Started
+
+The shortest local path is:
+
+```powershell
+git clone https://github.com/2mas-magalhaes/ClipperAI.git
+cd ClipperAI
+
+python -m venv venv
+.\venv\Scripts\activate
+
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+python -m pip install -r requirements.txt
+
+Copy-Item .env.example .env
+python app.py
+```
+
+Then open:
+
+```text
+http://localhost:5000
+```
+
+## Prerequisites
+
+- Python 3.9 or newer.
+- FFmpeg and FFprobe available in `PATH`.
+- Ollama installed locally for AI analysis.
+- At least one Ollama model pulled locally, for example `llama3.1`.
+- Enough disk space for downloaded source videos and generated clips.
+- Optional NVIDIA GPU/CUDA for faster transcription and video processing.
+- Optional Google Cloud OAuth client credentials for YouTube publishing.
+
+Recommended checks:
+
+```powershell
+python --version
+ffmpeg -version
+ffprobe -version
+ollama --version
+ollama list
+```
 
 ## Installation
 
-Clone the repository:
-
-```bash
-git clone https://github.com/<your-username>/ClipAI.git
-cd ClipAI
-```
-
 Create and activate a virtual environment:
 
-```bash
-python -m venv .venv
-```
-
-Windows:
-
 ```powershell
-.venv\Scripts\activate
-```
-
-macOS/Linux:
-
-```bash
-source .venv/bin/activate
+python -m venv venv
+.\venv\Scripts\activate
 ```
 
 Install dependencies:
 
-```bash
-pip install -r requirements.txt
+```powershell
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+python -m pip install -r requirements.txt
 ```
 
-Install and configure Ollama:
+On Windows, the UTF-8 environment variables avoid encoding errors when reading UTF-8 project files.
 
-```bash
+Install an Ollama model:
+
+```powershell
 ollama pull llama3.1
 ```
 
-## Running the Application
+## Environment Variables
 
-Run the web application:
+Copy `.env.example` to `.env` and fill only local values:
 
 ```powershell
-$env:PYTHONIOENCODING = "utf-8"; .\.venv\Scripts\python.exe app.py
+Copy-Item .env.example .env
+```
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `OLLAMA_MODEL` | Recommended | Local Ollama model used for clip analysis. |
+| `OLLAMA_API_URL` | Recommended | Ollama API URL, usually `http://localhost:11434`. |
+| `OLLAMA_TIMEOUT` | Optional | Timeout for local LLM calls. |
+| `WHISPER_MODEL` | Optional | Default Faster-Whisper model. |
+| `WHISPER_LANGUAGE` | Optional | Transcription language hint. |
+| `WHISPER_DEVICE` | Optional | `cpu` or `cuda`. |
+| `WHISPER_COMPUTE_TYPE` | Optional | Faster-Whisper compute type. |
+| `RAPIDAPI_KEY` | Optional | Enables the RapidAPI download fallback. Leave empty to disable. |
+| `GOOGLE_CREDENTIALS_FILES` | Optional | Local OAuth credential paths for rotation. Do not commit these files. |
+| `YOUTUBE_OUTPUT_DIR` | Optional | Runtime output directory for downloaded media. |
+| `AUDIO_OUTPUT_DIR` | Optional | Runtime output directory for audio artifacts. |
+| `VIDEO_OUTPUT_DIR` | Optional | Runtime output directory for generated videos. |
+
+Never commit `.env`, Google OAuth client files, generated OAuth tokens, `data/`, `downloads/`, or generated media.
+
+## Running Locally
+
+Start the web app:
+
+```powershell
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+python app.py
+```
+
+The Flask server runs on:
+
+```text
+http://localhost:5000
+```
+
+The app starts the queue worker on boot. If your local `data/clipai_db.json` already contains queued items, the worker can start processing them immediately. Use the dashboard worker control or this API call to stop it:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing -Method POST http://localhost:5000/api/worker/stop
 ```
 
 Run the direct script pipeline:
 
-```bash
+```powershell
 python main.py
 ```
 
-## Configuration
+This path downloads and processes the sample URL currently defined in `main.py`; review it before running against live media.
 
-Copy the example environment file before customizing local settings:
+## Build
 
-```bash
-cp .env.example .env
+There is no separate frontend bundling or production build step. The app is a Flask server with static JavaScript/CSS.
+
+Useful validation command:
+
+```powershell
+$env:PYTHONUTF8 = "1"
+python -m compileall app.py worker.py database.py modulo1_download.py modulo2_analise.py modulo3_edicao.py personagem_clippy.py
 ```
 
-Important local-only files that should never be committed:
+## Tests
 
-- `.env`
-- Google OAuth files such as `client_secret_*.json`
-- generated tokens such as `*_token.json`
-- `data/` and `downloads/`
+This repository currently contains script-style tests rather than a formal `pytest` suite:
 
-For YouTube publishing, configure a channel through the web interface and provide OAuth credentials for the YouTube Data API.
+| Script | Purpose | Notes |
+| --- | --- | --- |
+| `test_autopublish.py` | Inspects local auto-publishing configuration. | Reads local runtime data and prints a report. |
+| `test_clippy_v3.py` | Exercises Clippy rendering, animation, TTS, and AI hooks. | Requires FFmpeg and may require network/Ollama. |
+| `test_edicao.py` | Validates loop editing with existing local MP4 files. | Requires local media under `downloads/` and opens the output file. |
 
-Recommended workflow:
+Safe syntax/build validation:
 
-1. Add a channel in the web interface.
-2. Configure OAuth credentials for that channel.
-3. Enable automatic publishing globally or per queue item.
-4. Start the worker.
-5. Add videos to the queue.
-
-If credentials are missing or upload fails, clips remain available for review and manual publishing.
-
-If you want credential rotation, set `GOOGLE_CREDENTIALS_FILES` in `.env` with multiple local credential paths separated by `;` on Windows or `:` on macOS/Linux.
-
-## Example Programmatic Usage
-
-```python
-from modulo1_download import baixar_video_youtube
-from modulo2_analise import (
-    extrair_audio_do_video,
-    transcrever_audio_whisper,
-    analisar_com_ollama,
-)
-
-url = "https://www.youtube.com/watch?v=example"
-video_path = baixar_video_youtube(url, "input_video")
-audio_path = extrair_audio_do_video(video_path)
-transcript = transcrever_audio_whisper(audio_path)
-clip_candidates = analisar_com_ollama(transcript)
+```powershell
+$env:PYTHONUTF8 = "1"
+python -m compileall app.py worker.py database.py modulo1_download.py modulo2_analise.py modulo3_edicao.py personagem_clippy.py
 ```
 
-## Project Status
+Configuration smoke test:
 
-Implemented:
+```powershell
+$env:PYTHONUTF8 = "1"
+python test_autopublish.py
+```
 
-- YouTube video download
-- audio extraction
-- local transcription
-- local LLM-based clip analysis
-- automatic clip editing
-- vertical video export
-- dynamic subtitles
-- web interface
-- processing queue
-- background worker
-- manual review workflow
-- real YouTube upload through OAuth
-- automatic publishing workflow
-- upload logging and database updates
+Recommended next step: convert the script-style tests into a `pytest` suite with fixtures for temporary databases, sample media, mocked Ollama responses, and mocked YouTube API clients.
 
-Planned or expandable:
+## Screenshots / Demo
 
-- support for additional local LLM models
-- advanced scheduling controls
-- analytics dashboard
-- additional publishing targets
+Current screenshot:
 
-## Responsible Use
+![ClipAI dashboard](docs/assets/screenshots/home.png)
 
-ClipAI is intended for lawful and responsible content workflows. Users should respect copyright, platform terms of service, and the rights of original creators. Automated editing and publishing features should be used only with content the user owns, has permission to use, or can lawfully transform and publish.
+Suggested future demo captures:
+
+- `docs/assets/gifs/queue-processing.gif` showing queue add -> worker progress -> review.
+- `docs/assets/gifs/review-publish.gif` showing review metadata and publish action.
+- `docs/assets/videos/end-to-end-demo.mp4` using a non-private demo video and dummy publishing configuration.
+
+## Roadmap
+
+- Add a formal automated test suite with mocked external services.
+- Add a small, safe demo dataset for repeatable screenshots and GIFs.
+- Add CI for Python syntax checks, dependency installation, and security scanning.
+- Add a production deployment guide if the project moves beyond local development.
+- Add structured logging with secret redaction for OAuth and publishing flows.
+
+## Security
+
+- Secrets must live in `.env` or local credential files only.
+- OAuth client files and generated tokens are ignored by `.gitignore`.
+- `RAPIDAPI_KEY` is read from the environment; the RapidAPI fallback is disabled when it is empty.
+- Runtime state under `data/` and generated media under `downloads/` are ignored.
+- If a secret has ever been committed, revoke or rotate it outside this repository and clean Git history before treating the repository as safe.
+
+See [`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md) for the current audit notes and history-cleanup recommendations.
+
+## Contributing
+
+1. Create a branch from `main`.
+2. Keep generated media, `.env`, tokens, and OAuth files out of Git.
+3. Run installation and validation commands before opening a PR.
+4. Document any external services required by your change.
+5. Include screenshots or short demo clips for dashboard changes.
 
 ## License
 
-MIT License. See `LICENSE`.
+This project is released under the MIT License. See [`LICENSE`](LICENSE).
+
+## Authors / Maintainers
+
+- ClipAI contributors
+- Repository: [`2mas-magalhaes/ClipperAI`](https://github.com/2mas-magalhaes/ClipperAI)
