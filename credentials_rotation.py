@@ -7,6 +7,9 @@ import glob
 import json
 import logging
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 ROTATION_STATE_FILE = os.path.join("data", "credentials_rotation.json")
 GOOGLE_CREDENTIALS_ENV = "GOOGLE_CREDENTIALS_FILES"

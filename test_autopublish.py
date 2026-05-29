@@ -4,6 +4,13 @@ Script de teste para verificar o sistema de auto-publicação com logs
 
 import database as db
 
+
+def _redact_path(path):
+    """Avoid printing local OAuth paths or credential filenames in diagnostics."""
+    if not path:
+        return ""
+    return "[configured]"
+
 def verificar_configuracao():
     """Verifica se o sistema está configurado corretamente para auto-publicação."""
     
@@ -32,7 +39,7 @@ def verificar_configuracao():
             has_oauth = "✅" if creds and creds.strip() else "❌"
             print(f"   {has_oauth} {ch['name']} (ID: {ch['id']})")
             if creds:
-                print(f"      OAuth: {creds}")
+                print(f"      OAuth: {_redact_path(creds)}")
     print()
     
     # 3. Verificar queue
