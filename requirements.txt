@@ -1,0 +1,27 @@
+# ClipAI Python dependencies
+# Install with: python -m pip install -r requirements.txt
+
+# Web application
+Flask>=3.0.0
+
+# Video and audio processing
+yt-dlp>=2023.11.16
+moviepy>=1.0.3
+opencv-python>=4.8.0
+
+# AI and machine learning
+faster-whisper>=0.9.0
+torch>=2.0.0
+ollama>=0.1.6
+
+# Google / YouTube publishing
+google-api-python-client>=2.0.0
+google-auth>=2.0.0
+google-auth-oauthlib>=1.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Optional GPU performance dependency for some NVIDIA setups:
+# nvidia-cudnn-cu11>=8.6.0

@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClipAI — Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css?v={{ cache_bust }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <!-- SIDEBAR -->
+    <nav class="sidebar" id="sidebar">
+        <div class="sidebar-brand">
+            <i class="fas fa-bolt"></i>
+            <span>ClipAI</span>
+        </div>
+        <ul class="sidebar-nav">
+            <li class="nav-item active" data-page="dashboard">
+                <i class="fas fa-chart-line"></i>
+                <span>Dashboard</span>
+            </li>
+            <li class="nav-item" data-page="queue">
+                <i class="fas fa-list-ol"></i>
+                <span>Queue</span>
+                <span class="badge" id="queue-badge">0</span>
+            </li>
+            <li class="nav-item" data-page="channels">
+                <i class="fab fa-youtube"></i>
+                <span>Canais</span>
+            </li>
+            <li class="nav-item" data-page="followed">
+                <i class="fas fa-rss"></i>
+                <span>Canais a Seguir</span>
+            </li>
+            <li class="nav-item" data-page="review">
+                <i class="fas fa-clapperboard"></i>
+                <span>Revisão</span>
+                <span class="badge" id="review-badge">0</span>
+            </li>
+            <li class="nav-item" data-page="posted">
+                <i class="fas fa-video"></i>
+                <span>Publicados</span>
+            </li>
+            <li class="nav-item" data-page="schedules">
+                <i class="fas fa-calendar-alt"></i>
+                <span>Agendamentos</span>
+                <span class="badge" id="schedules-badge">0</span>
+            </li>
+            <li class="nav-item" data-page="settings">
+                <i class="fas fa-cog"></i>
+                <span>Definições</span>
+            </li>
+        </ul>
+        <div class="sidebar-footer">
+            <div class="worker-status" id="worker-status-indicator">
+                <span class="status-dot offline"></span>
+                <span>Worker Parado</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+        <!-- ═══════════════ DASHBOARD ═══════════════ -->
+        <div class="page active" id="page-dashboard">
+            <div class="page-header">
+                <h1>Dashboard</h1>
+                <p class="subtitle">Visão geral do ClipAI</p>
+            </div>
+
+            <!-- Stats Cards -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon blue"><i class="fas fa-clock"></i></div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="stat-queued">0</span>
+                        <span class="stat-label">Na Queue</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon orange"><i class="fas fa-spinner"></i></div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="stat-processing">0</span>
+                        <span class="stat-label">A Processar</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon green"><i class="fas fa-check-circle"></i></div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="stat-done">0</span>
+                        <span class="stat-label">Concluídos</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon purple"><i class="fas fa-upload"></i></div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="stat-posted">0</span>
+                        <span class="stat-label">Publicados</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Current Processing -->
+            <div class="card" id="current-processing-card">
+                <div class="card-header">
+                    <h2><i class="fas fa-play-circle"></i> A Processar Agora</h2>
+                </div>
+                <div class="card-body" id="current-processing-body">
+                    <div class="empty-state">
+                        <i class="fas fa-pause-circle"></i>
+                        <p>Nenhum vídeo a ser processado</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System Status -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-server"></i> Estado do Sistema</h2>
+                    <button class="btn btn-sm" onclick="checkSystem()">
+                        <i class="fas fa-sync-alt"></i> Verificar
+                    </button>
+                </div>
+                <div class="card-body" id="system-checks-body">
+                    <div class="empty-state small">
+                        <p>Clica em "Verificar" para testar o sistema</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════ QUEUE ═══════════════ -->
+        <div class="page" id="page-queue">
+            <div class="page-header">
+                <h1>Queue de Vídeos</h1>
+                <div class="page-actions">
+                    <button class="btn btn-danger" onclick="clearQueueModal()">
+                        <i class="fas fa-trash"></i> Limpar Queue
+                    </button>
+                    <button class="btn btn-primary" onclick="openAddVideoModal()">
+                        <i class="fas fa-plus"></i> Adicionar Vídeo
+                    </button>
+                    <button class="btn btn-success" id="btn-worker-toggle" onclick="toggleWorker()">
+                        <i class="fas fa-play"></i> Iniciar Worker
+                    </button>
+                </div>
+            </div>
+
+            <!-- Queue Table -->
+            <div class="queue-bulk-bar" id="queue-bulk-bar" style="display:none">
+                <div class="bulk-bar-left">
+                    <span><span class="bulk-count" id="bulk-selected-count">0</span> selecionados</span>
+                </div>
+                <div class="bulk-bar-actions">
+                    <button class="btn btn-sm" onclick="bulkSetChannel()" title="Mudar canal">
+                        <i class="fab fa-youtube"></i> Canal
+                    </button>
+                    <button class="btn btn-sm" onclick="bulkInterlaceChannels()" title="Intercalar canais automaticamente">
+                        <i class="fas fa-random"></i> Intercalar Canais
+                    </button>
+                    <button class="btn btn-sm" onclick="bulkSetPrivacy()" title="Mudar visibilidade">
+                        <i class="fas fa-eye"></i> Visibilidade
+                    </button>
+                    <button class="btn btn-sm" onclick="bulkSetAutoPublish(true)" title="Ativar auto-publicar">
+                        <i class="fas fa-check-circle"></i> Auto-publicar ON
+                    </button>
+                    <button class="btn btn-sm" onclick="bulkSetAutoPublish(false)" title="Desativar auto-publicar">
+                        <i class="fas fa-times-circle"></i> Auto-publicar OFF
+                    </button>
+                    <button class="btn btn-sm" onclick="bulkRetry()" title="Tentar novamente">
+                        <i class="fas fa-redo"></i> Retry
+                    </button>
+                    <button class="btn btn-sm btn-danger" onclick="bulkDelete()" title="Apagar selecionados">
+                        <i class="fas fa-trash"></i> Apagar
+                    </button>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-body no-pad">
+                    <table class="table" id="queue-table">
+                        <thead>
+                            <tr>
+                                <th style="width:36px">
+                                    <input type="checkbox" id="queue-select-all-head" onchange="toggleSelectAllQueue(this.checked)" title="Selecionar todos">
+                                </th>
+                                <th style="width:36px"></th>
+                                <th style="width:40px">#</th>
+                                <th>Título</th>
+                                <th>Canal</th>
+                                <th>Estado</th>
+                                <th>Progresso</th>
+                                <th>Clips</th>
+                                <th style="width:70px">Auto-pub</th>
+                                <th style="width:80px">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="queue-tbody">
+                        </tbody>
+                    </table>
+                    <div class="empty-state" id="queue-empty" style="display:none">
+                        <i class="fas fa-inbox"></i>
+                        <p>Queue vazia — adiciona um vídeo para começar</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════ CANAIS ═══════════════ -->
+        <div class="page" id="page-channels">
+            <div class="page-header">
+                <h1>Gestão de Canais</h1>
+                <button class="btn btn-primary" onclick="openAddChannelModal()">
+                    <i class="fas fa-plus"></i> Adicionar Canal
+                </button>
+            </div>
+
+            <div class="channels-grid" id="channels-grid">
+            </div>
+            <div class="empty-state" id="channels-empty" style="display:none">
+                <i class="fab fa-youtube"></i>
+                <p>Nenhum canal configurado</p>
+                <button class="btn btn-primary" onclick="openAddChannelModal()">Adicionar Canal</button>
+            </div>
+        </div>
+
+        <!-- ═══════════════ CANAIS A SEGUIR ═══════════════ -->
+        <div class="page" id="page-followed">
+            <div class="page-header">
+                <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                    <div>
+                        <h1>Canais a Seguir</h1>
+                        <p class="subtitle" id="next-scan-info" style="margin-top:4px">Próximo scan em <span id="next-scan-countdown">—</span></p>
+                    </div>
+                    <div></div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn" onclick="openAutoScanModal()">
+                        <i class="fas fa-rotate"></i> Scan Automático
+                    </button>
+                    <button class="btn" onclick="instantScan(this)">
+                        <i class="fas fa-search"></i> Scan Instantâneo
+                    </button>
+                    <button class="btn btn-primary" onclick="openAddFollowedModal()">
+                        <i class="fas fa-plus"></i> Seguir Canal
+                    </button>
+                </div>
+            </div>
+
+            <div class="followed-layout">
+                <div class="card">
+                    <div class="card-header">
+                        <h2><i class="fas fa-rss"></i> Fontes</h2>
+                    </div>
+                    <div class="card-body" id="followed-list"></div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h2><i class="fas fa-video"></i> Vídeos Recentes</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="source-videos-grid" id="followed-videos-grid"></div>
+                        <div class="empty-state" id="followed-videos-empty" style="display:none">
+                            <i class="fas fa-video"></i>
+                            <p>Seleciona um canal a seguir para ver vídeos recentes</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════ REVISÃO ═══════════════ -->
+        <div class="page" id="page-review">
+            <div class="page-header">
+                <h1>Revisão de Clips</h1>
+                <p class="subtitle">Pré-visualizar antes de publicar (ou deixar auto-publish ativo)</p>
+            </div>
+
+            <div class="queue-bulk-bar" id="review-bulk-bar" style="display:none">
+                <div class="bulk-bar-left" style="display:flex;align-items:center;gap:12px">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                        <input type="checkbox" id="review-select-all" onchange="toggleSelectAllReview(this.checked)">
+                        <span>Selecionar todos</span>
+                    </label>
+                    <span><span class="bulk-count" id="review-bulk-selected-count">0</span> selecionados</span>
+                </div>
+                <div class="bulk-bar-actions">
+                    <button class="btn btn-sm" onclick="bulkReviewSetChannel()" title="Mudar canal">
+                        <i class="fab fa-youtube"></i> Canal
+                    </button>
+                    <button class="btn btn-sm" onclick="bulkReviewInterlaceChannels()" title="Intercalar canais automaticamente">
+                        <i class="fas fa-random"></i> Intercalar Canais
+                    </button>
+                    <button class="btn btn-sm btn-success" onclick="bulkPublishReviewClips()" title="Publicar selecionados">
+                        <i class="fas fa-upload"></i> Publicar Todos
+                    </button>
+                    <button class="btn btn-sm btn-danger" onclick="bulkRejectReviewClips()" title="Rejeitar selecionados">
+                        <i class="fas fa-times"></i> Rejeitar Todos
+                    </button>
+                </div>
+            </div>
+
+            <div class="review-grid" id="review-grid"></div>
+            <div class="empty-state" id="review-empty" style="display:none">
+                <i class="fas fa-clapperboard"></i>
+                <p>Não há clips pendentes para revisão</p>
+            </div>
+        </div>
+
+        <!-- ═══════════════ PUBLICADOS ═══════════════ -->
+        <div class="page" id="page-posted">
+            <div class="page-header">
+                <h1>Vídeos Publicados</h1>
+                <p class="subtitle">Analytics dos clips publicados</p>
+            </div>
+
+            <div class="posted-grid" id="posted-grid">
+            </div>
+            <div class="empty-state" id="posted-empty" style="display:none">
+                <i class="fas fa-film"></i>
+                <p>Nenhum vídeo publicado ainda</p>
+            </div>
+        </div>
+
+        <!-- ═══════════════ AGENDAMENTOS ═══════════════ -->
+        <div class="page" id="page-schedules">
+            <div class="page-header">
+                <h1>Rever Agendamentos</h1>
+                <p class="subtitle">Gerir a frequência e reagendar vídeos</p>
+            </div>
+
+            <!-- Schedule Config -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-sliders-h"></i> Configuração de Agendamento</h2>
+                </div>
+                <div class="card-body">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Vídeos por dia</label>
+                            <input type="number" id="sched-videos-per-day" class="form-control" min="1" max="50" value="12">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Número máximo de vídeos a publicar por dia.</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Intervalo entre vídeos (horas)</label>
+                            <input type="number" id="sched-interval-hours" class="form-control" min="0.5" max="24" value="2" step="0.5">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Espaçamento entre cada publicação.</div>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Hora de início (diário)</label>
+                            <input type="time" id="sched-start-time" class="form-control" value="08:00">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Hora a partir da qual se publicam vídeos.</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Hora de fim (diário)</label>
+                            <input type="time" id="sched-end-time" class="form-control" value="22:00">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Hora limite para publicações do dia.</div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Canal para filtrar</label>
+                        <select id="sched-filter-channel" class="form-control">
+                            <option value="">— Todos os canais —</option>
+                        </select>
+                    </div>
+                    <div style="display:flex;gap:8px;margin-top:12px">
+                        <button class="btn btn-primary" onclick="saveScheduleConfig()">
+                            <i class="fas fa-save"></i> Guardar Configuração
+                        </button>
+                        <button class="btn btn-warning" onclick="rearrangeSchedules()">
+                            <i class="fas fa-magic"></i> Reagendar Tudo
+                        </button>
+                        <button class="btn btn-danger" onclick="clearAllSchedules()">
+                            <i class="fas fa-trash"></i> Limpar Agendamentos
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Schedule Overview -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-calendar-check"></i> Vídeos Agendados</h2>
+                    <div style="display:flex;gap:6px">
+                        <button class="btn btn-sm" onclick="syncSchedulesFromYouTube(this)" title="Buscar estado real dos vídeos no YouTube">
+                            <i class="fab fa-youtube"></i> Sincronizar com YouTube
+                        </button>
+                        <button class="btn btn-sm" onclick="fetchSchedules()">
+                            <i class="fas fa-sync-alt"></i> Atualizar
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body no-pad">
+                    <div id="schedules-sync-info" style="display:none;padding:8px 16px;font-size:0.8rem;background:var(--bg-tertiary);border-bottom:1px solid var(--border)"></div>
+                    <div id="schedules-timeline"></div>
+                    <table class="table" id="schedules-table">
+                        <thead>
+                            <tr>
+                                <th style="width:36px">#</th>
+                                <th>Vídeo</th>
+                                <th>Canal</th>
+                                <th>Agendado para</th>
+                                <th>Estado</th>
+                                <th style="width:120px">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="schedules-tbody">
+                        </tbody>
+                    </table>
+                    <div class="empty-state" id="schedules-empty" style="display:none">
+                        <i class="fas fa-calendar-times"></i>
+                        <p>Não há vídeos agendados</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════ DEFINIÇÕES ═══════════════ -->
+        <div class="page" id="page-settings">
+            <div class="page-header">
+                <h1>Definições</h1>
+                <p class="subtitle">Configuração do sistema e contas</p>
+            </div>
+
+            <!-- System Requirements -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-stethoscope"></i> Verificação do Sistema</h2>
+                    <button class="btn btn-sm" onclick="checkSystem()">
+                        <i class="fas fa-sync-alt"></i> Verificar Tudo
+                    </button>
+                </div>
+                <div class="card-body" id="settings-system-checks">
+                    <div class="checks-grid" id="checks-grid"></div>
+                </div>
+            </div>
+
+            <!-- Ollama Settings -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-brain"></i> Ollama / LLM</h2>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label>Modelo Ollama</label>
+                        <select id="setting-ollama-model" class="form-control">
+                            <option value="llama2">Llama 2</option>
+                            <option value="llama3">Llama 3</option>
+                            <option value="llama3.1">Llama 3.1</option>
+                            <option value="mistral">Mistral</option>
+                            <option value="gemma2">Gemma 2</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Estado do Ollama</label>
+                        <div class="ollama-status" id="ollama-status">
+                            <span class="status-dot offline"></span>
+                            <span>A verificar...</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Modelos Instalados</label>
+                        <div id="ollama-models-list" class="tags-list">
+                            <span class="tag muted">A carregar...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Processing Settings -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-sliders-h"></i> Processamento</h2>
+                </div>
+                <div class="card-body">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Máximo de clips por vídeo</label>
+                            <input type="number" id="setting-max-clips" class="form-control" min="1" max="20" value="7">
+                        </div>
+                        <div class="form-group">
+                            <label>Duração mínima do clip (seg)</label>
+                            <input type="number" id="setting-clip-min" class="form-control" min="10" max="60" value="30">
+                        </div>
+                        <div class="form-group">
+                            <label>Duração máxima do clip (seg)</label>
+                            <input type="number" id="setting-clip-max" class="form-control" min="30" max="180" value="60">
+                        </div>
+                        <div class="form-group">
+                            <label>Limite de duração do vídeo fonte (min)</label>
+                            <input type="number" id="setting-max-video-duration" class="form-control" min="1" max="600" value="60" placeholder="0 = sem limite">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Vídeos mais longos são ignorados. 0 = sem limite.</div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Canal padrão para publicação</label>
+                        <select id="setting-default-channel" class="form-control">
+                            <option value="">— Nenhum —</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="setting-auto-publish">
+                            <span>Publicar automaticamente após edição</span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="setting-usar-video-satisfatorio">
+                            <span>Usar video satisfying no layout final</span>
+                        </label>
+                        <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Se desativado, os clips usam o video principal em tela inteira.</div>
+                    </div>
+                    <button class="btn btn-primary" onclick="saveSettings()">
+                        <i class="fas fa-save"></i> Guardar Definições
+                    </button>
+                </div>
+            </div>
+
+            <!-- Scheduled Publishing Settings -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-clock"></i> Agendamento Automático</h2>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="setting-schedule-enabled">
+                            <span>Ativar agendamento automático de publicações</span>
+                        </label>
+                        <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">
+                            Quando ativo, os vídeos são publicados como privados e agendados para saírem em intervalos regulares.
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Intervalo entre publicações (horas)</label>
+                            <input type="number" id="setting-schedule-interval" class="form-control" min="1" max="24" value="2" step="0.5">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">
+                                Tempo entre a publicação de cada vídeo agendado.
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Máximo de vídeos por sessão</label>
+                            <input type="number" id="setting-schedule-max-batch" class="form-control" min="1" max="20" value="5">
+                            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">
+                                Número máximo de vídeos a agendar de uma só vez.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="info-box">
+                        <i class="fas fa-info-circle"></i>
+                        <div>
+                            <strong>Como funciona:</strong>
+                            <ul>
+                                <li>O primeiro vídeo é agendado para daqui a 2 minutos</li>
+                                <li>Os seguintes são espaçados pelo intervalo definido (exemplo: 2 em 2 horas)</li>
+                                <li>Os vídeos ficam privados no YouTube até à hora agendada</li>
+                                <li>Perfeito para distribuir conteúdo ao longo do dia automaticamente</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" onclick="saveSettings()">
+                        <i class="fas fa-save"></i> Guardar Definições
+                    </button>
+                </div>
+            </div>
+
+            <!-- Auto Manager Settings -->
+            <!-- YouTube Accounts -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fab fa-youtube"></i> Contas YouTube</h2>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">As contas YouTube são geridas através dos canais. Adiciona um canal e associa o ficheiro de credenciais OAuth.</p>
+                    <div class="info-box">
+                        <i class="fas fa-info-circle"></i>
+                        <div>
+                            <strong>Como configurar:</strong>
+                            <ol>
+                                <li>Vai a <a href="https://console.cloud.google.com" target="_blank">Google Cloud Console</a></li>
+                                <li>Cria um projeto e ativa a YouTube Data API v3</li>
+                                <li>Cria credenciais OAuth 2.0 (Desktop App)</li>
+                                <li>Faz download do <code>client_secrets.json</code></li>
+                                <li>Adiciona o caminho do ficheiro ao criar o canal</li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- ═══════════════ MODALS ═══════════════ -->
+
+    <!-- Add Video Modal -->
+    <div class="modal-overlay" id="modal-add-video" style="display:none">
+        <div class="modal">
+            <div class="modal-header">
+                <h3><i class="fas fa-plus-circle"></i> Adicionar Vídeo à Queue</h3>
+                <button class="modal-close" onclick="closeModal('modal-add-video')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Tabs para YouTube vs Ficheiro -->
+                <div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--border-color);padding-bottom:12px">
+                    <button class="tab-btn active" onclick="switchAddVideoTab('youtube')" style="flex:1;padding:8px;background:none;border:none;color:inherit;cursor:pointer;border-bottom:2px solid transparent;transition:all 0.2s" id="tab-youtube-btn">
+                        <i class="fab fa-youtube"></i> URL YouTube
+                    </button>
+                    <button class="tab-btn" onclick="switchAddVideoTab('file')" style="flex:1;padding:8px;background:none;border:none;color:inherit;cursor:pointer;border-bottom:2px solid transparent;transition:all 0.2s" id="tab-file-btn">
+                        <i class="fas fa-file-video"></i> Ficheiro Local
+                    </button>
+                </div>
+
+                <!-- YouTube Tab -->
+                <div id="tab-youtube-content">
+                    <div class="form-group">
+                        <label>URL do YouTube *</label>
+                        <input type="url" id="video-url" class="form-control" placeholder="https://www.youtube.com/watch?v=...">
+                    </div>
+                    <div class="form-group">
+                        <label>Título (opcional)</label>
+                        <input type="text" id="video-title" class="form-control" placeholder="Nome para identificar o vídeo">
+                    </div>
+                </div>
+
+                <!-- File Tab -->
+                <div id="tab-file-content" style="display:none">
+                    <div class="form-group">
+                        <label>URL do Vídeo Original (YouTube)</label>
+                        <input type="url" id="video-origin-url" class="form-control" placeholder="https://www.youtube.com/watch?v=..." style="margin-bottom:8px">
+                        <div id="video-origin-status" style="font-size:0.85rem;color:var(--text-muted);margin-top:4px">Cole a URL original para auto-preencher nome, canal e descrição</div>
+                        <div id="video-origin-info" style="display:none;margin-top:8px;padding:8px;background:var(--bg-secondary);border-radius:4px;font-size:0.85rem">
+                            <p style="margin:4px 0" id="origin-title-display"></p>
+                            <p style="margin:4px 0" id="origin-channel-display"></p>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Ficheiro de Vídeo *</label>
+                        <div style="border:2px dashed var(--border-color);border-radius:8px;padding:20px;text-align:center;cursor:pointer;transition:all 0.2s" id="file-drop-area">
+                            <input type="file" id="video-file" accept="video/*" style="display:none">
+                            <div style="font-size:32px;margin-bottom:8px"><i class="fas fa-cloud-upload-alt"></i></div>
+                            <p style="margin:0;font-weight:500">Arraste vídeo ou clique para selecionar</p>
+                            <p style="margin:4px 0 0 0;font-size:0.85rem;color:var(--text-muted)">MP4, WebM, MKV até 4GB</p>
+                        </div>
+                        <div id="file-name-display" style="margin-top:8px;padding:8px;background:var(--bg-secondary);border-radius:4px;display:none">
+                            <i class="fas fa-check-circle" style="color:var(--green)"></i>
+                            <span id="file-name-text"></span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Título do Vídeo *</label>
+                        <input type="text" id="video-file-title" class="form-control" placeholder="Nome para identificar o vídeo">
+                    </div>
+                </div>
+
+                <!-- Comum -->
+                <div class="form-group">
+                    <label>Publicar no Canal</label>
+                    <select id="video-channel" class="form-control">
+                        <option value="">— Escolher depois —</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="video-auto-publish">
+                        <span>Publicar automaticamente após edição</span>
+                    </label>
+                    <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Se desativado, o clip vai para Revisão primeiro.</div>
+                </div>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="video-usar-video-satisfatorio">
+                        <span>Usar video satisfying neste video</span>
+                    </label>
+                    <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Desativa para gerar o clip em tela inteira.</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeModal('modal-add-video')">Cancelar</button>
+                <button class="btn btn-primary" onclick="addVideoToQueue()" id="btn-add-video">
+                    <i class="fas fa-plus"></i> Adicionar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Channel Modal -->
+    <div class="modal-overlay" id="modal-add-channel" style="display:none">
+        <div class="modal">
+            <div class="modal-header">
+                <h3><i class="fab fa-youtube"></i> Adicionar Canal</h3>
+                <button class="modal-close" onclick="closeModal('modal-add-channel')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Nome do Canal *</label>
+                    <input type="text" id="channel-name" class="form-control" placeholder="Nome do canal YouTube">
+                </div>
+                <div class="form-group">
+                    <label>URL do Canal</label>
+                    <input type="url" id="channel-url" class="form-control" placeholder="https://www.youtube.com/@canal">
+                </div>
+                <div class="form-group">
+                    <label>Caminho do client_secrets.json</label>
+                    <input type="text" id="channel-credentials" class="form-control" placeholder="C:\caminho\para\client_secrets.json">
+                </div>
+                <div class="form-group">
+                    <label>Descrição</label>
+                    <textarea id="channel-description" class="form-control" rows="2" placeholder="Notas sobre este canal..."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeModal('modal-add-channel')">Cancelar</button>
+                <button class="btn btn-primary" onclick="addChannel()">
+                    <i class="fas fa-plus"></i> Adicionar Canal
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast notification -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Clear Queue Modal -->
+    <div class="modal-overlay" id="modal-clear-queue" style="display:none">
+        <div class="modal">
+            <div class="modal-header">
+                <h3><i class="fas fa-trash"></i> Limpar Queue</h3>
+                <button class="modal-close" onclick="closeModal('modal-clear-queue')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom:12px">Tens a certeza que queres remover <strong>todos os vídeos</strong> da queue?</p>
+                <p>Esta ação é <strong>irreversível</strong>.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeModal('modal-clear-queue')">Cancelar</button>
+                <button class="btn btn-danger" onclick="confirmClearQueue()">
+                    <i class="fas fa-trash"></i> Limpar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Followed Channel Modal -->
+    <div class="modal-overlay" id="modal-add-followed" style="display:none">
+        <div class="modal">
+            <div class="modal-header">
+                <h3><i class="fas fa-rss"></i> Seguir Canal Fonte</h3>
+                <button class="modal-close" onclick="closeModal('modal-add-followed')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Nome *</label>
+                    <input type="text" id="followed-name" class="form-control" placeholder="Ex: Canal Tech PT">
+                </div>
+                <div class="form-group">
+                    <label>URL do Canal Fonte *</label>
+                    <input type="url" id="followed-source-url" class="form-control" placeholder="https://www.youtube.com/@canal/videos">
+                </div>
+                <div class="form-group">
+                    <label>Máximo de dias desde publicação</label>
+                    <input type="number" id="followed-max-age" class="form-control" min="1" max="90" value="7">
+                </div>
+                <div class="form-group">
+                    <label>Publicar clips no canal</label>
+                    <select id="followed-target-channel" class="form-control">
+                        <option value="">— Escolher canal destino —</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeModal('modal-add-followed')">Cancelar</button>
+                <button class="btn btn-primary" onclick="addFollowedChannel()">
+                    <i class="fas fa-plus"></i> Guardar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js?v={{ cache_bust }}"></script>
+</body>
+</html>
