@@ -276,8 +276,20 @@ def _get_youtube_service(credentials_path, token_path=None):
                 scopes=["https://www.googleapis.com/auth/youtube",
                          "https://www.googleapis.com/auth/youtube.upload"]
             )
+            # Tenta várias portas até encontrar uma livre (evita WinError 10048)
+            import socket as _socket
+            _oauth_port = 0
+            for _candidate in (8090, 8091, 8092, 8093, 8094, 8095, 0):
+                try:
+                    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as _s:
+                        _s.bind(("127.0.0.1", _candidate))
+                    _oauth_port = _candidate
+                    break
+                except OSError:
+                    continue
+            logs.append(f"A abrir browser para autorização OAuth (porta {_oauth_port})...")
             creds = flow.run_local_server(
-                port=8090,
+                port=_oauth_port,
                 prompt="consent",
                 success_message="Autenticação concluída! Pode fechar esta janela.",
                 open_browser=True,
@@ -755,7 +767,7 @@ def api_upload_local_video():
         title = request.form.get('title', 'Vídeo Carregado').strip()
         channel_id = request.form.get('channel_id') or None
         auto_publish = request.form.get('auto_publish') == '1'
-        usar_video_satisfatorio = request.form.get("usar_video_satisfatorio", "1") == "1"
+        usar_video_satisfatorio = request.form.get("usar_video_satisfatorio", "0") == "1"
         
         # Dados originais do YouTube (se disponíveis)
         origin_title = request.form.get('origin_title', '').strip()
@@ -2585,9 +2597,8 @@ def _start_server():
     os.makedirs("downloads/satisfying", exist_ok=True)
     _silenciar_logs_http()
 
-    # ── Worker ──
-    worker.start()
-    logging.info("⚙️  Worker iniciado")
+    # ── Worker (não arranca automaticamente — utilizador inicia manualmente) ──
+    logging.info("⚙️  Worker pronto (parado por defeito)")
 
     # ── Proxies em background ──
     if _HAS_PROXY:

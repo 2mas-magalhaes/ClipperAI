@@ -257,6 +257,14 @@ function renderQueue() {
                 </label>
             </td>
             <td>
+                <label class="auto-pub-toggle" title="Usar vídeo satisfying (desativar para estilo Opus Clips)">
+                    <input type="checkbox" ${item.usar_video_satisfatorio !== false ? 'checked' : ''}
+                        ${item.status !== 'queued' ? 'disabled' : ''}
+                        onchange="setQueueSatisfying('${item.id}', this.checked)">
+                    <span class="auto-pub-label">Sat</span>
+                </label>
+            </td>
+            <td>
                 <div style="display:flex;gap:4px">
                     ${item.status === 'queued' ? `<button class="btn btn-icon btn-sm" title="Remover" onclick="removeFromQueue('${item.id}')"><i class="fas fa-trash" style="color:var(--red)"></i></button>` : ''}
                     ${item.status === 'error' ? `<button class="btn btn-icon btn-sm" title="Tentar de novo" onclick="retryQueueItem('${item.id}')"><i class="fas fa-redo" style="color:var(--orange)"></i></button>` : ''}
@@ -449,6 +457,12 @@ async function setQueueAutoPublish(id, value) {
     await api(`/api/queue/${id}`, 'PATCH', { auto_publish: value });
     const item = queueData.find(q => q.id === id);
     if (item) item.auto_publish = value;
+}
+
+async function setQueueSatisfying(id, value) {
+    await api(`/api/queue/${id}`, 'PATCH', { usar_video_satisfatorio: value });
+    const item = queueData.find(q => q.id === id);
+    if (item) item.usar_video_satisfatorio = value;
 }
 
 async function removeFromQueue(id) {

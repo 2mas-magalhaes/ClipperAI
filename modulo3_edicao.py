@@ -284,8 +284,8 @@ def gerar_legendas_ass(segmentos, caminho_ass, inicio_corte, duracao_corte, text
 
     # ── HEADER DO ARQUIVO ASS ──
     # PlayResX/Y = 1080x1920 (resolução do vídeo vertical)
-    # Legendas posicionadas na zona inferior, bem enquadradas abaixo do vídeo
-    # MarginV=160 → base do texto fica a ~160px do fundo, abaixo do conteúdo do vídeo
+    # Legendas posicionadas na zona inferior (Alignment=2 = baixo-centro),
+    # enquadradas na parte de baixo do ecrã com margem de 300px do fundo.
     header = """[Script Info]
 Title: ClipAI Legendas Profissionais
 ScriptType: v4.00+
@@ -296,7 +296,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Legenda,Impact,100,&H00FFFFFF,&H000000FF,&H00000000,&HD2000000,-1,0,0,0,100,100,1,0,1,5,3,5,50,50,0,1
+Style: Legenda,Impact,100,&H00FFFFFF,&H000000FF,&H00000000,&HD2000000,-1,0,0,0,100,100,1,0,1,5,3,2,50,50,300,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -927,7 +927,8 @@ def detectar_face_info(caminho_video):
         cap = cv2.VideoCapture(caminho_video)
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        sample_interval = max(1, int(fps * 1.0))
+        # Amostragem densa (a cada ~0.5s) para um enquadramento médio mais preciso
+        sample_interval = max(1, int(fps * 0.5))
         deteccoes = []
         frame_idx = 0
 
@@ -957,21 +958,19 @@ def detectar_face_info(caminho_video):
 
         total_amostras = max(1, total_frames // sample_interval)
         det_rate = len(deteccoes) / total_amostras
-        if det_rate < 0.20:
+        if det_rate < 0.15:
             return None
 
-        # Suavização e mediana ponderada
+        # ── Posição robusta da face (mediana) ──
+        # A mediana ignora detecções outlier (ex: frame com falso positivo no canto),
+        # garantindo um enquadramento estável e bem centrado como o OpusClip.
+        xs = sorted(d[0] for d in deteccoes)
+        ys = sorted(d[1] for d in deteccoes)
+        n = len(deteccoes)
+        cx = int(xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2)
+        cy = int(ys[n // 2] if n % 2 else (ys[n // 2 - 1] + ys[n // 2]) / 2)
         total_conf = sum(d[2] for d in deteccoes)
-        if total_conf > 0:
-            wcx = sum(d[0] * d[2] for d in deteccoes) / total_conf
-            wcy = sum(d[1] * d[2] for d in deteccoes) / total_conf
-        else:
-            wcx = sum(d[0] for d in deteccoes) / len(deteccoes)
-            wcy = sum(d[1] for d in deteccoes) / len(deteccoes)
-
-        cx = int(wcx)
-        cy = int(wcy)
-        avg_conf = total_conf / len(deteccoes) if deteccoes else 0
+        avg_conf = total_conf / n if n else 0
 
         return {
             "cx": cx, "cy": cy,
@@ -1246,26 +1245,27 @@ def _encode_com_filtros(caminho_video, caminho_saida, vf=None, filter_complex=No
         'ffmpeg', '-noautorotate', '-i', caminho_video,
         *filtro_args,
         '-c:v', 'h264_nvenc', '-preset', 'p7', '-profile:v', 'high',
-        '-rc:v', 'vbr', '-cq:v', '14', '-b:v', '12M',
-        '-maxrate', '20M', '-bufsize', '40M',
-        '-bf:v', '3', '-g', '60', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+        '-rc:v', 'vbr', '-cq:v', '13', '-b:v', '16M',
+        '-maxrate', '24M', '-bufsize', '48M',
+        '-rc-lookahead', '20', '-spatial_aq', '1', '-temporal_aq', '1', '-aq-strength', '8',
+        '-bf:v', '3', '-b_ref_mode', 'middle', '-g', '60', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '256k', '-ar', '48000',
         '-movflags', '+faststart', '-y', caminho_saida
     ]
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     if res.returncode == 0 and os.path.exists(caminho_saida) and os.path.getsize(caminho_saida) > 1000:
-        print("  ⚡ NVENC P7 (GPU qualidade máxima)")
+        print("  ⚡ NVENC P7 + AQ adaptativo (GPU qualidade máxima)")
         return True
 
     # ── libx264 qualidade máxima ──
     cmd2 = [
         'ffmpeg', '-noautorotate', '-i', caminho_video,
         *filtro_args,
-        '-c:v', 'libx264', '-preset', 'slow', '-crf', '14',
+        '-c:v', 'libx264', '-preset', 'slow', '-crf', '13',
         '-profile:v', 'high', '-level', '4.2', '-bf', '3',
-        '-maxrate', '20M', '-bufsize', '40M',
+        '-maxrate', '24M', '-bufsize', '48M',
         '-threads', '0', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+        '-c:a', 'aac', '-b:a', '256k', '-ar', '48000',
         '-movflags', '+faststart', '-y', caminho_saida
     ]
     res2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=900)
@@ -1332,15 +1332,16 @@ def _encode_com_filtros_2in(caminho_video, caminho_video2, caminho_saida,
         '-map', '[out]', '-map', '[aout2]',
         '-t', str(duracao),
         '-c:v', 'h264_nvenc', '-preset', 'p7', '-profile:v', 'high',
-        '-rc:v', 'vbr', '-cq:v', '14', '-b:v', '12M',
-        '-maxrate', '20M', '-bufsize', '40M',
-        '-bf:v', '3', '-g', '60', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+        '-rc:v', 'vbr', '-cq:v', '13', '-b:v', '16M',
+        '-maxrate', '24M', '-bufsize', '48M',
+        '-rc-lookahead', '20', '-spatial_aq', '1', '-temporal_aq', '1', '-aq-strength', '8',
+        '-bf:v', '3', '-b_ref_mode', 'middle', '-g', '60', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '256k', '-ar', '48000',
         '-movflags', '+faststart', '-y', caminho_saida
     ]
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     if res.returncode == 0 and os.path.exists(caminho_saida) and os.path.getsize(caminho_saida) > 1000:
-        print("  ⚡ NVENC P7 2-input (GPU qualidade máxima)")
+        print("  ⚡ NVENC P7 2-input + AQ adaptativo (GPU qualidade máxima)")
         return True
 
     # ── libx264 fallback ──
@@ -1351,11 +1352,11 @@ def _encode_com_filtros_2in(caminho_video, caminho_video2, caminho_saida,
         '-filter_complex', fc_sync,
         '-map', '[out]', '-map', '[aout2]',
         '-t', str(duracao),
-        '-c:v', 'libx264', '-preset', 'slow', '-crf', '14',
+        '-c:v', 'libx264', '-preset', 'slow', '-crf', '13',
         '-profile:v', 'high', '-level', '4.2', '-bf', '3',
-        '-maxrate', '20M', '-bufsize', '40M',
+        '-maxrate', '24M', '-bufsize', '48M',
         '-threads', '0', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+        '-c:a', 'aac', '-b:a', '256k', '-ar', '48000',
         '-movflags', '+faststart', '-y', caminho_saida
     ]
     res2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=1200)
@@ -1642,29 +1643,70 @@ def _aplicar_edicao_standard(caminho_video, caminho_ass, caminho_saida,
         )
 
     else:
-        # ====== LAYOUT FULL-SCREEN: blurred BG + todos os efeitos ======
-        scale_ratio = 1080 / w
-        scaled_h = int(h * scale_ratio)
-        y_offset  = (1920 - scaled_h) / 2
+        # ====== LAYOUT OPUS CLIPS: face-tracked crop to fill 9:16 + todos os efeitos ======
+        # Se o vídeo é landscape (mais largo que 9:16), escala para preencher altura 1920
+        # e corta 1080px centrado na face → estilo Opus Clips sem barras pretas.
+        # Se o vídeo já é portrait, usa o caminho de letterbox.
+        TARGET_W = 1080
+        TARGET_H = 1920
+        src_aspect = w / max(1, h)
+        target_aspect = TARGET_W / TARGET_H  # 9:16 ≈ 0.5625
 
-        if face_info and face_info.get("cx_pct"):
-            face_x_composed = face_info["cx_pct"]
-            face_y_composed = (y_offset + face_info["cy_pct"] * scaled_h) / 1920
+        if src_aspect > target_aspect:
+            # Landscape → escala pela altura, crop na face
+            scale_ratio_h = TARGET_H / h
+            scaled_w = int(w * scale_ratio_h)
+            scaled_w -= scaled_w % 2
+            scaled_h_fs = TARGET_H
+
+            if face_info and face_info.get("cx_pct"):
+                face_x_px = face_info["cx_pct"] * scaled_w
+                crop_x = int(face_x_px - TARGET_W / 2)
+                crop_x = max(0, min(scaled_w - TARGET_W, crop_x))
+                crop_x -= crop_x % 2
+                face_x_composed = 0.5
+                face_y_composed = face_info["cy_pct"]
+                print(f"  Opus Clips: crop landscape face_x={face_info['cx_pct']:.0%} → crop_x={crop_x}px")
+            else:
+                crop_x = max(0, (scaled_w - TARGET_W) // 2)
+                crop_x -= crop_x % 2
+                face_x_composed = 0.5
+                face_y_composed = 0.5
+                print(f"  Opus Clips: crop landscape centrado (sem face)")
+
+            parts = []
+            # Crop nítido a preencher todo o frame 9:16, centrado na face (estilo OpusClip).
+            # O crop preenche 1080x1920 por completo → não precisa de background.
+            parts.append(
+                f"[0:v]scale={scaled_w}:{scaled_h_fs}:flags=lanczos,"
+                f"crop={TARGET_W}:{TARGET_H}:{crop_x}:0[_composed]"
+            )
         else:
-            face_x_composed = 0.5
-            face_y_composed = 0.50
+            # Portrait/square: fit width, blurred letterbox
+            scale_ratio_w = TARGET_W / w
+            scaled_h_fs = int(h * scale_ratio_w)
+            scaled_h_fs -= scaled_h_fs % 2
+            y_offset = (TARGET_H - scaled_h_fs) / 2
 
-        parts = []
-        parts.append("[0:v]split=2[_vmain][_vblur]")
-        parts.append(
-            "[_vblur]scale=1080:1920:force_original_aspect_ratio=increase,"
-            "crop=1080:1920,"
-            "boxblur=22:5,"
-            "eq=brightness=-0.10:saturation=0.4[_bg]"
-        )
-        parts.append(f"[_vmain]scale=1080:{scaled_h}:flags=lanczos[_fg]")
-        overlay_y = max(0, (1920 - scaled_h) // 2)
-        parts.append(f"[_bg][_fg]overlay=0:{overlay_y}[_composed]")
+            if face_info and face_info.get("cx_pct"):
+                face_x_composed = face_info["cx_pct"]
+                face_y_composed = (y_offset + face_info["cy_pct"] * scaled_h_fs) / TARGET_H
+            else:
+                face_x_composed = 0.5
+                face_y_composed = 0.5
+            print(f"  Opus Clips: portrait letterbox (sem barras landscape)")
+
+            parts = []
+            parts.append("[0:v]split=2[_vmain][_vblur]")
+            parts.append(
+                f"[_vblur]scale={TARGET_W}:{TARGET_H}:force_original_aspect_ratio=increase,"
+                f"crop={TARGET_W}:{TARGET_H},"
+                f"boxblur=22:5,"
+                f"eq=brightness=-0.10:saturation=0.4[_bg]"
+            )
+            parts.append(f"[_vmain]scale={TARGET_W}:{scaled_h_fs}:flags=lanczos[_fg]")
+            overlay_y = max(0, (TARGET_H - scaled_h_fs) // 2)
+            parts.append(f"[_bg][_fg]overlay=0:{overlay_y}[_composed]")
 
         # Zoom dinâmico + breathing
         zoom_filter = gerar_filtro_zoom_dinamico(
@@ -1680,8 +1722,6 @@ def _aplicar_edicao_standard(caminho_video, caminho_ass, caminho_saida,
 
         # ══════ TODOS OS EFEITOS PROFISSIONAIS ══════
         fade_out_start = max(0, duracao_clip - 0.6)
-        progress_y = 1920 - 28
-        progress_h = 6
 
         efx = [
             "format=yuv420p",
@@ -1806,11 +1846,13 @@ def aplicar_loop_infinito(caminho_entrada, caminho_saida, duracao_clip, xfade_du
                 '-filter_complex', fc,
                 '-map', '[vout]', '-map', '[aout]',
                 '-c:v', 'h264_nvenc',
-                '-preset', 'p5', '-profile:v', 'high',
-                '-rc:v', 'vbr', '-cq:v', '16', '-b:v', '0',
-                '-maxrate', '14M', '-bufsize', '28M',
+                '-preset', 'p7', '-profile:v', 'high',
+                '-rc:v', 'vbr', '-cq:v', '13', '-b:v', '16M',
+                '-maxrate', '24M', '-bufsize', '48M',
+                '-rc-lookahead', '20', '-spatial_aq', '1', '-temporal_aq', '1', '-aq-strength', '8',
+                '-bf:v', '3', '-b_ref_mode', 'middle',
                 '-pix_fmt', 'yuv420p',
-                '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+                '-c:a', 'aac', '-b:a', '256k', '-ar', '48000',
                 '-movflags', '+faststart', '-y', caminho_saida
             ]
             res = subprocess.run(cmd_nvenc, capture_output=True, text=True, timeout=300)
@@ -1825,10 +1867,11 @@ def aplicar_loop_infinito(caminho_entrada, caminho_saida, duracao_clip, xfade_du
                 '-filter_complex', fc,
                 '-map', '[vout]', '-map', '[aout]',
                 '-c:v', 'libx264',
-                '-preset', 'slow', '-crf', '16',
+                '-preset', 'slow', '-crf', '13',
                 '-profile:v', 'high', '-level', '4.2',
+                '-maxrate', '24M', '-bufsize', '48M',
                 '-threads', '0', '-pix_fmt', 'yuv420p',
-                '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+                '-c:a', 'aac', '-b:a', '256k', '-ar', '48000',
                 '-movflags', '+faststart', '-y', caminho_saida
             ]
             res2 = subprocess.run(cmd_x264, capture_output=True, text=True, timeout=600)

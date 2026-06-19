@@ -470,7 +470,7 @@ def _rapidapi_download_file(download_url, caminho_saida, headers, progress_callb
         return False
 
 
-def baixar_video_youtube(url_do_video, nome_arquivo="video_original", progress_callback=None):
+def baixar_video_youtube(url_do_video, nome_arquivo="video_original", progress_callback=None, status_callback=None):
     """
     Baixa um vídeo do YouTube ou copia um ficheiro local.
 
@@ -486,11 +486,21 @@ def baixar_video_youtube(url_do_video, nome_arquivo="video_original", progress_c
     Args:
         url_do_video (str): URL do vídeo do YouTube ou local://caminho/para/video.mp4
         nome_arquivo (str): Nome do arquivo a ser salvo (sem extensão)
-        progress_callback (callable): Função callback(pct) para atualizar progresso
+        progress_callback (callable): Função callback(pct) para atualizar progresso numérico
+        status_callback (callable): Função callback(msg) para atualizar texto de estado na UI
 
     Returns:
         str: Caminho completo do arquivo baixado ou None se falhar
     """
+    def _status(msg):
+        """Envia mensagem de estado para o callback e para o log."""
+        logging.info(f"  ℹ️  {msg}")
+        if status_callback:
+            try:
+                status_callback(msg)
+            except Exception:
+                pass
+
     # Cria a pasta downloads se ela não existir
     pasta_destino = "downloads"
     if not os.path.exists(pasta_destino):
@@ -598,6 +608,7 @@ def baixar_video_youtube(url_do_video, nome_arquivo="video_original", progress_c
         try:
             _limpar_parciais(caminho_completo)
             if not descricao.startswith("sem cookies"):
+                _status(f"A tentar {descricao}...")
                 print(f"  🔐 Tentando com {descricao}...")
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -612,6 +623,7 @@ def baixar_video_youtube(url_do_video, nome_arquivo="video_original", progress_c
                     res_h = int(detalhe.split('x')[1].split(',')[0])
                     if max(res_w, res_h) < 720:
                         print(f"  ⚠️ Resolução baixa ({res_w}x{res_h}), a tentar outro método...")
+                        _status(f"Resolução baixa ({res_w}x{res_h}), a tentar fallback...")
                         if os.path.exists(caminho_completo):
                             os.remove(caminho_completo)
                         ultimo_erro = Exception(f"Resolução baixa: {res_w}x{res_h}")
@@ -643,6 +655,7 @@ def baixar_video_youtube(url_do_video, nome_arquivo="video_original", progress_c
 
     # ── Tentativas com PROXY ROTATIVA (quando os métodos falharam) ──
     if _HAS_PROXY:
+        _status("A tentar com proxies rotativas...")
         print("  🔄 A tentar com proxies...")
         proxies_usadas = set()
         for proxy_attempt in range(5):
@@ -657,6 +670,7 @@ def baixar_video_youtube(url_do_video, nome_arquivo="video_original", progress_c
                         break
                 proxies_usadas.add(proxy_url)
 
+                _status(f"Proxy #{proxy_attempt+1}: {proxy_url[:35]}...")
                 print(f"  🌐 Proxy #{proxy_attempt+1}: {proxy_url[:40]}...")
                 _limpar_parciais(caminho_completo)
 
@@ -702,6 +716,7 @@ def baixar_video_youtube(url_do_video, nome_arquivo="video_original", progress_c
                 continue
 
     # ── Fallback: RapidAPI YouTube Downloader ──
+    _status("A tentar RapidAPI YouTube Downloader...")
     print("  🌐 A tentar RapidAPI YouTube Downloader...")
     # Tenta 1080p primeiro, depois 720p
     for api_quality in (1080, 720):
@@ -712,6 +727,7 @@ def baixar_video_youtube(url_do_video, nome_arquivo="video_original", progress_c
 
     # ── Fallback Final: Pytube (API completamente diferente) ──
     if _HAS_PYTUBE:
+        _status("A tentar pytubefix (API alternativa)...")
         if _baixar_com_pytube(url_do_video, caminho_completo):
             # Refrescar proxies para próxima utilização
             if _HAS_PROXY:

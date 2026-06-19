@@ -527,7 +527,16 @@ class QueueWorker:
                 if pct % 10 == 0:  # Log a cada 10%
                     logging.info(f"   ⬇️  Download: {pct}%")
             
-            caminho_video = baixar_video_youtube(item["url"], safe_name, progress_callback=download_progress_callback)
+            def download_status_callback(msg):
+                """Atualiza o detalhe de estado na UI durante fallbacks do download."""
+                db.update_queue_item(item_id, status_detail=f"Download: {msg}")
+                logging.info(f"   🔄 Download fallback: {msg}")
+
+            caminho_video = baixar_video_youtube(
+                item["url"], safe_name,
+                progress_callback=download_progress_callback,
+                status_callback=download_status_callback,
+            )
 
             if not caminho_video or not os.path.exists(caminho_video):
                 db.update_queue_item(item_id, status="error",
