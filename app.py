@@ -8,6 +8,19 @@ import sys
 import logging
 from dotenv import load_dotenv
 
+
+def _configure_console_encoding():
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
+_configure_console_encoding()
+
 load_dotenv()
 
 # Garantir que o venv correto é usado
@@ -263,8 +276,20 @@ def _get_youtube_service(credentials_path, token_path=None):
                 scopes=["https://www.googleapis.com/auth/youtube",
                          "https://www.googleapis.com/auth/youtube.upload"]
             )
+            # Tenta várias portas até encontrar uma livre (evita WinError 10048)
+            import socket as _socket
+            _oauth_port = 0
+            for _candidate in (8090, 8091, 8092, 8093, 8094, 8095, 0):
+                try:
+                    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as _s:
+                        _s.bind(("127.0.0.1", _candidate))
+                    _oauth_port = _candidate
+                    break
+                except OSError:
+                    continue
+            logs.append(f"A abrir browser para autorização OAuth (porta {_oauth_port})...")
             creds = flow.run_local_server(
-                port=8090,
+                port=_oauth_port,
                 prompt="consent",
                 success_message="Autenticação concluída! Pode fechar esta janela.",
                 open_browser=True,
@@ -700,6 +725,7 @@ def api_add_to_queue():
         channel_id=data.get("channel_id"),
         priority=data.get("priority", 0),
         auto_publish=data.get("auto_publish"),
+        usar_video_satisfatorio=data.get("usar_video_satisfatorio"),
     )
     return jsonify(item), 201
 
@@ -741,6 +767,7 @@ def api_upload_local_video():
         title = request.form.get('title', 'Vídeo Carregado').strip()
         channel_id = request.form.get('channel_id') or None
         auto_publish = request.form.get('auto_publish') == '1'
+        usar_video_satisfatorio = request.form.get("usar_video_satisfatorio", "0") == "1"
         
         # Dados originais do YouTube (se disponíveis)
         origin_title = request.form.get('origin_title', '').strip()
@@ -757,6 +784,7 @@ def api_upload_local_video():
             title=title or os.path.splitext(file.filename)[0],
             channel_id=channel_id,
             auto_publish=auto_publish,
+            usar_video_satisfatorio=usar_video_satisfatorio,
         )
         
         # Guardar dados originais no item (para usar na descrição depois)
@@ -829,6 +857,13 @@ def api_bulk_queue():
         value = bool(data.get("auto_publish", data.get("value", False)))
         for item_id in ids:
             r = db.update_queue_item(item_id, auto_publish=value)
+            if r:
+                results["updated"] += 1
+
+    elif action == "set_satisfying_video":
+        value = bool(data.get("usar_video_satisfatorio", data.get("value", True)))
+        for item_id in ids:
+            r = db.update_queue_item(item_id, usar_video_satisfatorio=value)
             if r:
                 results["updated"] += 1
 
@@ -2562,9 +2597,8 @@ def _start_server():
     os.makedirs("downloads/satisfying", exist_ok=True)
     _silenciar_logs_http()
 
-    # ── Worker ──
-    worker.start()
-    logging.info("⚙️  Worker iniciado")
+    # ── Worker (não arranca automaticamente — utilizador inicia manualmente) ──
+    logging.info("⚙️  Worker pronto (parado por defeito)")
 
     # ── Proxies em background ──
     if _HAS_PROXY:

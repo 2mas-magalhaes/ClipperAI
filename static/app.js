@@ -257,6 +257,14 @@ function renderQueue() {
                 </label>
             </td>
             <td>
+                <label class="auto-pub-toggle" title="Usar vídeo satisfying (desativar para estilo Opus Clips)">
+                    <input type="checkbox" ${item.usar_video_satisfatorio !== false ? 'checked' : ''}
+                        ${item.status !== 'queued' ? 'disabled' : ''}
+                        onchange="setQueueSatisfying('${item.id}', this.checked)">
+                    <span class="auto-pub-label">Sat</span>
+                </label>
+            </td>
+            <td>
                 <div style="display:flex;gap:4px">
                     ${item.status === 'queued' ? `<button class="btn btn-icon btn-sm" title="Remover" onclick="removeFromQueue('${item.id}')"><i class="fas fa-trash" style="color:var(--red)"></i></button>` : ''}
                     ${item.status === 'error' ? `<button class="btn btn-icon btn-sm" title="Tentar de novo" onclick="retryQueueItem('${item.id}')"><i class="fas fa-redo" style="color:var(--orange)"></i></button>` : ''}
@@ -449,6 +457,12 @@ async function setQueueAutoPublish(id, value) {
     await api(`/api/queue/${id}`, 'PATCH', { auto_publish: value });
     const item = queueData.find(q => q.id === id);
     if (item) item.auto_publish = value;
+}
+
+async function setQueueSatisfying(id, value) {
+    await api(`/api/queue/${id}`, 'PATCH', { usar_video_satisfatorio: value });
+    const item = queueData.find(q => q.id === id);
+    if (item) item.usar_video_satisfatorio = value;
 }
 
 async function removeFromQueue(id) {
@@ -1274,6 +1288,7 @@ function openAddVideoModal() {
     document.getElementById('tab-file-btn').style.color = 'inherit';
     // Pre-preenche o checkbox com o valor global
     document.getElementById('video-auto-publish').checked = settingsData.auto_publish || false;
+    document.getElementById('video-usar-video-satisfatorio').checked = settingsData.usar_video_satisfatorio !== false;
     document.getElementById('modal-add-video').style.display = 'flex';
     document.getElementById('video-url').focus();
 }
@@ -1293,13 +1308,20 @@ async function addVideoYoutube() {
     const title = document.getElementById('video-title').value.trim();
     const channelId = document.getElementById('video-channel').value;
     const autoPublish = document.getElementById('video-auto-publish').checked;
+    const usarVideoSatisfatorio = document.getElementById('video-usar-video-satisfatorio').checked;
 
     if (!url) {
         toast('URL é obrigatória', 'error');
         return;
     }
 
-    await api('/api/queue', 'POST', { url, title, channel_id: channelId || null, auto_publish: autoPublish });
+    await api('/api/queue', 'POST', {
+        url,
+        title,
+        channel_id: channelId || null,
+        auto_publish: autoPublish,
+        usar_video_satisfatorio: usarVideoSatisfatorio,
+    });
     closeModal('modal-add-video');
     toast('Vídeo adicionado à queue!', 'success');
     fetchQueue();
@@ -1310,6 +1332,7 @@ async function addVideoFromFile() {
     const title = document.getElementById('video-file-title').value.trim();
     const channelId = document.getElementById('video-channel').value;
     const autoPublish = document.getElementById('video-auto-publish').checked;
+    const usarVideoSatisfatorio = document.getElementById('video-usar-video-satisfatorio').checked;
 
     if (!fileInput.files || !fileInput.files[0]) {
         toast('Selecione um ficheiro de vídeo', 'error');
@@ -1335,6 +1358,7 @@ async function addVideoFromFile() {
     formData.append('title', title);
     formData.append('channel_id', channelId || null);
     formData.append('auto_publish', autoPublish ? '1' : '0');
+    formData.append('usar_video_satisfatorio', usarVideoSatisfatorio ? '1' : '0');
     
     // Add origin data if available
     if (window.videoOriginData) {
@@ -2579,6 +2603,7 @@ function renderSettings() {
     document.getElementById('setting-clip-max').value = settingsData.clip_duration_max || 60;
     document.getElementById('setting-max-video-duration').value = settingsData.max_video_duration_min || 60;
     document.getElementById('setting-auto-publish').checked = settingsData.auto_publish || false;
+    document.getElementById('setting-usar-video-satisfatorio').checked = settingsData.usar_video_satisfatorio !== false;
 
     // Scheduled publishing settings
     document.getElementById('setting-schedule-enabled').checked = settingsData.schedule_enabled !== false; // default true
@@ -2600,6 +2625,7 @@ async function saveSettings() {
         clip_duration_max: parseInt(document.getElementById('setting-clip-max').value) || 60,
         max_video_duration_min: parseInt(document.getElementById('setting-max-video-duration').value) || 60,
         auto_publish: document.getElementById('setting-auto-publish').checked,
+        usar_video_satisfatorio: document.getElementById('setting-usar-video-satisfatorio').checked,
         default_channel_id: document.getElementById('setting-default-channel').value || null,
         schedule_enabled: document.getElementById('setting-schedule-enabled').checked,
         schedule_interval_hours: parseFloat(document.getElementById('setting-schedule-interval').value) || 2,

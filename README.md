@@ -38,15 +38,11 @@ The project is designed for local execution. It uses local files for runtime sta
 
 ## Features
 
-- Web dashboard for queue management, channels, schedules, review, and settings.
-- YouTube video download via `yt-dlp`, with proxy support and an optional RapidAPI fallback.
-- Local transcription with Faster-Whisper.
-- Local clip selection and metadata generation through Ollama.
-- Automated vertical video editing with FFmpeg/OpenCV, subtitles, dynamic crop/zoom, and loop handling.
-- Review workflow for generated clips before publishing.
-- Optional YouTube Data API publishing with OAuth and credential rotation.
-- Local JSON database for queues, channels, review clips, posted videos, and scheduler state.
-- "Clippy" character utilities for animated hooks, voice, and interventions.
+- Queue-based web dashboard for long-form video ingestion, processing, review, and publishing.
+- Local AI transcription and clip selection with Faster-Whisper and Ollama.
+- FFmpeg/OpenCV vertical editing with subtitles, face-aware framing, optional satisfying split layout, and full-screen fallback.
+- Review-first publishing workflow with optional auto-publish and YouTube OAuth rotation.
+- Local JSON persistence for a self-contained automation demo.
 
 ## Tech Stack
 
@@ -58,7 +54,6 @@ The project is designed for local execution. It uses local files for runtime sta
 | Transcription | Faster-Whisper |
 | LLM analysis | Ollama |
 | Video processing | FFmpeg, FFprobe, MoviePy, OpenCV |
-| Image / TTS | Pillow, edge-tts |
 | Publishing | Google API Python Client, YouTube Data API OAuth |
 | Storage | Local JSON database under `data/` |
 
@@ -71,8 +66,7 @@ The project is designed for local execution. It uses local files for runtime sta
 |-- database.py               # Local JSON persistence layer
 |-- modulo1_download.py       # YouTube/local video ingestion
 |-- modulo2_analise.py        # Audio extraction, Whisper, Ollama analysis
-|-- modulo3_edicao.py         # FFmpeg/OpenCV editing pipeline
-|-- personagem_clippy.py      # Clippy character rendering, TTS, hooks
+|-- modulo3_edicao.py         # FFmpeg/OpenCV editing pipeline and layout selection
 |-- credentials_rotation.py   # Google OAuth credential discovery/rotation
 |-- proxy_rotator.py          # Public proxy discovery and rotation helpers
 |-- auto_manager.py           # Playlist/channel auto-scan manager
@@ -80,6 +74,7 @@ The project is designed for local execution. It uses local files for runtime sta
 |-- static/app.js             # Dashboard client logic
 |-- static/style.css          # Dashboard styling
 |-- docs/assets/              # Screenshots, GIFs, and videos for docs
+|-- test_layout_options.py    # Unit tests for layout option behavior
 |-- test_*.py                 # Script-style smoke/manual tests
 |-- requirements.txt          # Python dependencies
 |-- .env.example              # Safe environment variable template
@@ -218,7 +213,7 @@ Useful validation command:
 
 ```powershell
 $env:PYTHONUTF8 = "1"
-python -m compileall app.py worker.py database.py modulo1_download.py modulo2_analise.py modulo3_edicao.py personagem_clippy.py
+python -m compileall app.py worker.py database.py modulo1_download.py modulo2_analise.py modulo3_edicao.py
 ```
 
 ## Tests
@@ -228,14 +223,13 @@ This repository currently contains script-style tests rather than a formal `pyte
 | Script | Purpose | Notes |
 | --- | --- | --- |
 | `test_autopublish.py` | Inspects local auto-publishing configuration. | Reads local runtime data and prints a report. |
-| `test_clippy_v3.py` | Exercises Clippy rendering, animation, TTS, and AI hooks. | Requires FFmpeg and may require network/Ollama. |
 | `test_edicao.py` | Validates loop editing with existing local MP4 files. | Requires local media under `downloads/` and opens the output file. |
 
 Safe syntax/build validation:
 
 ```powershell
 $env:PYTHONUTF8 = "1"
-python -m compileall app.py worker.py database.py modulo1_download.py modulo2_analise.py modulo3_edicao.py personagem_clippy.py
+python -m compileall app.py worker.py database.py modulo1_download.py modulo2_analise.py modulo3_edicao.py
 ```
 
 Configuration smoke test:
@@ -246,6 +240,21 @@ python test_autopublish.py
 ```
 
 Recommended next step: convert the script-style tests into a `pytest` suite with fixtures for temporary databases, sample media, mocked Ollama responses, and mocked YouTube API clients.
+
+## Validation
+
+```powershell
+python -m unittest test_layout_options.py -v
+python -m compileall app.py worker.py database.py modulo1_download.py modulo2_analise.py modulo3_edicao.py
+```
+
+The repository also contains script-style smoke checks for publishing and editing flows. Full end-to-end media generation requires FFmpeg, FFprobe, Ollama, and sample video input.
+
+## Current Limitations
+
+- The application is designed for local automation rather than hosted multi-user deployment.
+- End-to-end video processing depends on local FFmpeg, FFprobe, Whisper model downloads, and an Ollama model.
+- YouTube publishing requires user-provided OAuth credentials that must remain outside Git.
 
 ## Screenshots / Demo
 

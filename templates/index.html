@@ -192,6 +192,7 @@
                                 <th>Progresso</th>
                                 <th>Clips</th>
                                 <th style="width:70px">Auto-pub</th>
+                                <th style="width:50px" title="Vídeo Satisfying">Sat</th>
                                 <th style="width:80px">Ações</th>
                             </tr>
                         </thead>
@@ -507,6 +508,13 @@
                             <span>Publicar automaticamente após edição</span>
                         </label>
                     </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="setting-usar-video-satisfatorio">
+                            <span>Usar video satisfying no layout final</span>
+                        </label>
+                        <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Se desativado, os clips usam o video principal em tela inteira.</div>
+                    </div>
                     <button class="btn btn-primary" onclick="saveSettings()">
                         <i class="fas fa-save"></i> Guardar Definições
                     </button>
@@ -663,6 +671,13 @@
                         <span>Publicar automaticamente após edição</span>
                     </label>
                     <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Se desativado, o clip vai para Revisão primeiro.</div>
+                </div>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="video-usar-video-satisfatorio">
+                        <span>Usar video satisfying neste video</span>
+                    </label>
+                    <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">Desativa para gerar o clip em tela inteira.</div>
                 </div>
             </div>
             <div class="modal-footer">

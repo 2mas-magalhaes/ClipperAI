@@ -98,6 +98,13 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+On Windows, set UTF-8 output before running the app or validation commands:
+
+```powershell
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+```
+
 ---
 
 ## Step 4: Configure Environment
@@ -221,3 +228,10 @@ ClipAI/
 2. Add a source video to the queue.
 3. Review the generated clips in `downloads/`.
 4. Configure a YouTube channel only on your local machine when you need publishing.
+
+## Validation
+
+```powershell
+python -m unittest test_layout_options.py -v
+python -m compileall app.py worker.py database.py modulo1_download.py modulo2_analise.py modulo3_edicao.py
+```

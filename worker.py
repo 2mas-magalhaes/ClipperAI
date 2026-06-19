@@ -527,7 +527,16 @@ class QueueWorker:
                 if pct % 10 == 0:  # Log a cada 10%
                     logging.info(f"   ⬇️  Download: {pct}%")
             
-            caminho_video = baixar_video_youtube(item["url"], safe_name, progress_callback=download_progress_callback)
+            def download_status_callback(msg):
+                """Atualiza o detalhe de estado na UI durante fallbacks do download."""
+                db.update_queue_item(item_id, status_detail=f"Download: {msg}")
+                logging.info(f"   🔄 Download fallback: {msg}")
+
+            caminho_video = baixar_video_youtube(
+                item["url"], safe_name,
+                progress_callback=download_progress_callback,
+                status_callback=download_status_callback,
+            )
 
             if not caminho_video or not os.path.exists(caminho_video):
                 db.update_queue_item(item_id, status="error",
@@ -715,10 +724,21 @@ class QueueWorker:
                 db.update_queue_item(item_id, progress=int(overall_pct), status_detail=status)
                 if pct in [0, 50, 100]:
                     logging.info(f"   ✂️  Clip {clip_idx}/{total_clips}: {pct}% {detail}")
-            
-            clipes_editados = editar_clipes(caminho_video, clipes, segmentos_whisper, 
-                                           progress_callback=edit_progress_callback,
-                                           unique_id=item_id)
+
+            settings = db.get_settings()
+            usar_video_satisfatorio = item.get(
+                "usar_video_satisfatorio",
+                settings.get("usar_video_satisfatorio", True),
+            )
+
+            clipes_editados = editar_clipes(
+                caminho_video,
+                clipes,
+                segmentos_whisper,
+                progress_callback=edit_progress_callback,
+                unique_id=item_id,
+                usar_video_satisfatorio=bool(usar_video_satisfatorio),
+            )
 
             if not clipes_editados:
                 db.update_queue_item(item_id, status="error", error_msg="Nenhum clipe editado",

@@ -28,6 +28,7 @@ def _default_db():
             "whisper_model_cpu": "small",
             "default_channel_id": None,
             "auto_publish": False,
+            "usar_video_satisfatorio": False,
             "auto_scan_interval_minutes": 30,
             "max_clips_per_video": 7,
             "clip_duration_min": 30,
@@ -69,6 +70,12 @@ def _load():
                     db["settings"]["ollama_model"] = "llama3.1"
             except Exception:
                 pass
+
+            for item in db.get("queue", []):
+                if "usar_video_satisfatorio" not in item:
+                    item["usar_video_satisfatorio"] = bool(
+                        db.get("settings", {}).get("usar_video_satisfatorio", False)
+                    )
             
             # Garantir que scheduled_uploads existe
             if "scheduled_uploads" not in db:
@@ -96,12 +103,14 @@ def get_queue():
         return db.get("queue", [])
 
 
-def add_to_queue(url, title="", channel_id=None, priority=0, auto_publish=None):
+def add_to_queue(url, title="", channel_id=None, priority=0, auto_publish=None, usar_video_satisfatorio=None):
     with _lock:
         db = _load()
         # Se auto_publish não for especificado, usa o default global
         if auto_publish is None:
             auto_publish = bool(db.get("settings", {}).get("auto_publish", False))
+        if usar_video_satisfatorio is None:
+            usar_video_satisfatorio = bool(db.get("settings", {}).get("usar_video_satisfatorio", False))
         item = {
             "id": str(uuid.uuid4())[:8],
             "url": url,
@@ -111,6 +120,7 @@ def add_to_queue(url, title="", channel_id=None, priority=0, auto_publish=None):
             "source_channel_name": "",
             "priority": priority,
             "auto_publish": bool(auto_publish),
+            "usar_video_satisfatorio": bool(usar_video_satisfatorio),
             "status": "queued",
             "status_detail": "",
             "progress": 0,
@@ -128,11 +138,14 @@ def add_to_queue(url, title="", channel_id=None, priority=0, auto_publish=None):
         return item
 
 
-def add_to_queue_with_meta(url, title="", channel_id=None, priority=0, source_video_id=None, source_channel_name="", auto_publish=None):
+def add_to_queue_with_meta(url, title="", channel_id=None, priority=0, source_video_id=None,
+                           source_channel_name="", auto_publish=None, usar_video_satisfatorio=None):
     with _lock:
         db = _load()
         if auto_publish is None:
             auto_publish = bool(db.get("settings", {}).get("auto_publish", False))
+        if usar_video_satisfatorio is None:
+            usar_video_satisfatorio = bool(db.get("settings", {}).get("usar_video_satisfatorio", False))
         item = {
             "id": str(uuid.uuid4())[:8],
             "url": url,
@@ -142,6 +155,7 @@ def add_to_queue_with_meta(url, title="", channel_id=None, priority=0, source_vi
             "source_channel_name": source_channel_name,
             "priority": priority,
             "auto_publish": bool(auto_publish),
+            "usar_video_satisfatorio": bool(usar_video_satisfatorio),
             "status": "queued",
             "status_detail": "",
             "progress": 0,

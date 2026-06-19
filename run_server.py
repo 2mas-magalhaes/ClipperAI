@@ -17,6 +17,7 @@ MAX_RESTART_DELAY = 120          # máximo 2 minutos entre restarts
 INITIAL_RESTART_DELAY = 3        # 3 segundos no primeiro restart
 HEALTHY_UPTIME = 60              # se correr >60s, reset do delay
 LOG_FILE = "data/server_watchdog.log"
+VERSION = "1.0"
 
 # ── Garantir que estamos no diretório certo ──
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -64,9 +65,12 @@ def main():
     restart_count = 0
 
     logging.info("=" * 60)
-    logging.info("🐕 WATCHDOG ClipAI iniciado")
-    logging.info(f"   Python: {VENV_PYTHON}")
-    logging.info(f"   Diretório: {os.getcwd()}")
+    logging.info(f"🐕 WATCHDOG ClipAI v{VERSION} iniciado")
+    logging.info(f"   Python  : {VENV_PYTHON}")
+    logging.info(f"   Dir     : {os.getcwd()}")
+    logging.info(f"   Log     : {os.path.abspath(LOG_FILE)}")
+    logging.info(f"   URL     : http://localhost:5000")
+    logging.info(f"   Restart : delay inicial {INITIAL_RESTART_DELAY}s, máx {MAX_RESTART_DELAY}s")
     logging.info("=" * 60)
 
     while True:
@@ -77,6 +81,7 @@ def main():
             proc = run_server()
             exit_code = proc.wait()     # bloqueia até o processo terminar
             uptime = time.time() - start_time
+            uptime_str = f"{int(uptime // 60)}m{int(uptime % 60)}s"
 
             if exit_code == 0:
                 logging.info("✅ Servidor terminou normalmente (exit 0)")
@@ -84,8 +89,8 @@ def main():
 
             # ── Crash / Erro ──
             restart_count += 1
-            logging.warning(f"💥 Servidor crashou! (exit code: {exit_code})")
-            logging.warning(f"   Uptime: {uptime:.1f}s | Restarts: {restart_count}")
+            logging.warning(f"💥 Servidor crashou! (exit {exit_code}) — uptime {uptime_str} — restart #{restart_count}")
+            logging.warning(f"   Logs completos em: {os.path.abspath(LOG_FILE)}")
 
             # Se correu >60s, resetar delay (não é loop infinito de crash)
             if uptime > HEALTHY_UPTIME:
@@ -94,6 +99,7 @@ def main():
             else:
                 # Delay exponencial: 3s, 6s, 12s, 24s... até máx 120s
                 restart_delay = min(restart_delay * 2, MAX_RESTART_DELAY)
+                logging.warning(f"   ⚡ Uptime baixo ({uptime_str}) — possível crash em loop")
 
             logging.info(f"🔄 A reiniciar em {restart_delay}s...")
             time.sleep(restart_delay)
@@ -105,12 +111,15 @@ def main():
                 try:
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
+                    logging.warning("   ⚠️ Processo não terminou, a forçar kill...")
                     proc.kill()
             logging.info("👋 Watchdog terminado.")
             break
 
         except Exception as e:
+            import traceback as _tb
             logging.error(f"❌ Erro no watchdog: {e}")
+            logging.error(_tb.format_exc())
             restart_count += 1
             time.sleep(restart_delay)
             restart_delay = min(restart_delay * 2, MAX_RESTART_DELAY)
