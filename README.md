@@ -37,13 +37,13 @@ Video Queue — lists every video waiting to be processed, with title, target ch
 
 ### Channels
 
-![canais](docs/assets/screenshots/canais.png)
+![channels](docs/assets/screenshots/channels.png)
 
 Channel Management — where you connect YouTube channels via OAuth for publishing clips. Each card shows subscribers, published videos and views, and lets you test the connection, swap accounts or disable the channel.
 
 ### Watched Channels
 
-![canais a seguir](docs/assets/screenshots/canais-a-seguir.png)
+![watched channels](docs/assets/screenshots/watched-channels.png)
 
 Watched Channels — ClipAI auto-scans these source channels (in this example, `windohclips`) looking for new videos to turn into clips. Each video shows how many days ago it was published, whether clips already exist, and can be added to the queue in one click.
 
