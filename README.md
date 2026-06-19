@@ -49,8 +49,6 @@ Watched Channels — ClipAI auto-scans these source channels (in this example, `
 
 ### Review
 
-![review](docs/assets/screenshots/review.png)
-
 Review — before publishing, you can preview each generated clip, select multiple items, reject weak cuts, and publish only the best ones.
 
 ### Published
