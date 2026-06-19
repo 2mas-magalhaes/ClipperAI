@@ -25,25 +25,25 @@ You drop a URL into the queue, and the worker handles the rest: downloads the vi
 
 ### Dashboard
 
-![dashboard](docs/assets/screenshots/dashboard-v2.png)
+![dashboard](docs/assets/screenshots/dashboard-v3.png)
 
 Main dashboard — shows counters for videos in queue, processing, done and published, plus the worker status and what's currently being downloaded.
 
 ### Queue
 
-![queue](docs/assets/screenshots/queue-v2.png)
+![queue](docs/assets/screenshots/queue-v3.png)
 
 Video Queue — lists every video waiting to be processed, with title, target channel, status (downloading, publishing, queued), progress and quick actions (retry, delete, change channel, auto-publish).
 
 ### Channels
 
-![channels](docs/assets/screenshots/channels-v2.png)
+![channels](docs/assets/screenshots/channels-v3.png)
 
 Channel Management — where you connect YouTube channels via OAuth for publishing clips. Each card shows subscribers, published videos and views, and lets you test the connection, swap accounts or disable the channel.
 
 ### Watched Channels
 
-![watched channels](docs/assets/screenshots/watched-channels-v2.png)
+![watched channels](docs/assets/screenshots/watched-channels-v3.png)
 
 Watched Channels — ClipAI auto-scans these source channels (in this example, `windohclips`) looking for new videos to turn into clips. Each video shows how many days ago it was published, whether clips already exist, and can be added to the queue in one click.
 
@@ -53,19 +53,19 @@ Review — before publishing, you can preview each generated clip, select multip
 
 ### Published
 
-![published](docs/assets/screenshots/published-v2.png)
+![published](docs/assets/screenshots/published-v3.png)
 
 Published Videos — complete history of published clips with thumbnail, title, visibility, views, likes, comments, and one-click links to open the video on YouTube.
 
 ### Scheduling
 
-![schedules](docs/assets/screenshots/schedules-v2.png)
+![schedules](docs/assets/screenshots/schedules-v3.png)
 
 Scheduling — configure posting frequency, day window, and bulk rescheduling. ClipAI can spread uploads across the day automatically.
 
 ### Settings
 
-![settings](docs/assets/screenshots/settings-v2.png)
+![settings](docs/assets/screenshots/settings-v3.png)
 
 Settings — central control for clip generation defaults (durations, max clips, channel, auto-publish and satisfying layout), plus YouTube account management and OAuth checks.
 
