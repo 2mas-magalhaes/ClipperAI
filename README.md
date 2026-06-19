@@ -47,6 +47,30 @@ Channel Management — where you connect YouTube channels via OAuth for publishi
 
 Watched Channels — ClipAI auto-scans these source channels (in this example, `windohclips`) looking for new videos to turn into clips. Each video shows how many days ago it was published, whether clips already exist, and can be added to the queue in one click.
 
+### Review
+
+![review](docs/assets/screenshots/review.png)
+
+Review — before publishing, you can preview each generated clip, select multiple items, reject weak cuts, and publish only the best ones.
+
+### Published
+
+![published](docs/assets/screenshots/published.png)
+
+Published Videos — complete history of published clips with thumbnail, title, visibility, views, likes, comments, and one-click links to open the video on YouTube.
+
+### Scheduling
+
+![schedules](docs/assets/screenshots/schedules.png)
+
+Scheduling — configure posting frequency, day window, and bulk rescheduling. ClipAI can spread uploads across the day automatically.
+
+### Settings
+
+![settings](docs/assets/screenshots/settings.png)
+
+Settings — central control for clip generation defaults (durations, max clips, channel, auto-publish and satisfying layout), plus YouTube account management and OAuth checks.
+
 ## Requirements
 
 - Python 3.9+
