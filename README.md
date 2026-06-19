@@ -47,11 +47,6 @@ Channel Management — where you connect YouTube channels via OAuth for publishi
 
 Watched Channels — ClipAI auto-scans these source channels (in this example, `windohclips`) looking for new videos to turn into clips. Each video shows how many days ago it was published, whether clips already exist, and can be added to the queue in one click.
 
-### Review
-
-![review](docs/assets/screenshots/review.png)
-
-Review — before publishing, you can preview each generated clip, select multiple items, reject weak cuts, and publish only the best ones.
 
 ### Published
 
