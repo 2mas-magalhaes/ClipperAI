@@ -67,7 +67,7 @@ Scheduling — configure posting frequency, day window, and bulk rescheduling. C
 
 ![settings](docs/assets/screenshots/settings-v3.png)
 
-Settings — central control for clip generation defaults (durations, max clips, channel, auto-publish and satisfying layout), plus YouTube account management and OAuth checks.
+Settings — central control for clip generation defaults (durations, max clips, channel, Ai model selection, auto-publish and satisfying layout), plus YouTube account management and OAuth checks.
 
 ## Requirements
 
