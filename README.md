@@ -46,7 +46,6 @@ You drop a URL into the queue, and a background worker handles the rest: it down
   <img src="https://img.shields.io/badge/▶%20WATCH%20THE%20DEMO-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="Watch the demo on YouTube"/>
 </a>
 
-<p>👇 &nbsp; <strong>Click the image below to play</strong> &nbsp; 👇</p>
 
 [![ClipAI demo video — click to play](https://img.youtube.com/vi/O3AHu_EP7CM/maxresdefault.jpg)](https://www.youtube.com/watch?v=O3AHu_EP7CM)
 
