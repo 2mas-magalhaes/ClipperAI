@@ -1,39 +1,36 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="1200" height="360" role="img" aria-label="ClipAI">
   <defs>
     <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#4F8CFF"/>
-      <stop offset="1" stop-color="#7C5CFF"/>
+      <stop offset="0" stop-color="#7C5CFF">
+        <animate attributeName="stop-color" values="#7C5CFF;#9B6CFF;#6E8BFF;#7C5CFF" dur="6s" repeatCount="indefinite"/>
+      </stop>
+      <stop offset="1" stop-color="#A855F7">
+        <animate attributeName="stop-color" values="#A855F7;#7C5CFF;#9B6CFF;#A855F7" dur="6s" repeatCount="indefinite"/>
+      </stop>
     </linearGradient>
   </defs>
 
-  <!-- Background -->
+  <!-- Solid background -->
   <rect width="1200" height="360" fill="#0D1117"/>
-  <line x1="334" y1="284" x2="980" y2="284" stroke="#1F2630" stroke-width="1"/>
-
-  <!-- Mark: rounded square with a play triangle, drawn on load -->
-  <g transform="translate(150,108)">
-    <rect x="0" y="0" width="140" height="140" rx="34" fill="none" stroke="url(#accent)" stroke-width="6"
-          stroke-dasharray="560" stroke-dashoffset="560">
-      <animate attributeName="stroke-dashoffset" from="560" to="0" dur="1.4s" fill="freeze" calcMode="spline" keySplines="0.4 0 0.2 1"/>
-    </rect>
-    <path d="M 56 44 L 104 70 L 56 96 Z" fill="url(#accent)" opacity="0">
-      <animate attributeName="opacity" from="0" to="1" begin="1s" dur="0.6s" fill="freeze"/>
-    </path>
-    <!-- subtle progress sweep along the bottom edge -->
-    <line x1="24" y1="118" x2="116" y2="118" stroke="#21262D" stroke-width="4" stroke-linecap="round"/>
-    <line x1="24" y1="118" x2="116" y2="118" stroke="url(#accent)" stroke-width="4" stroke-linecap="round"
-          stroke-dasharray="92" stroke-dashoffset="92">
-      <animate attributeName="stroke-dashoffset" values="92;0;0;92" keyTimes="0;0.4;0.7;1" dur="4.5s" begin="1.6s" repeatCount="indefinite"/>
-    </line>
-  </g>
 
   <!-- Wordmark -->
-  <text x="334" y="192" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="104" font-weight="600" letter-spacing="-2">
+  <text x="600" y="190" text-anchor="middle"
+        font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="120" font-weight="600" letter-spacing="-2">
     <tspan fill="#E6EDF3">Clip</tspan><tspan fill="url(#accent)">AI</tspan>
+    <animate attributeName="opacity" values="0;1" dur="1s" fill="freeze"/>
   </text>
 
+  <!-- Animated underline sweep -->
+  <line x1="430" y1="224" x2="770" y2="224" stroke="#21262D" stroke-width="4" stroke-linecap="round"/>
+  <line x1="430" y1="224" x2="770" y2="224" stroke="url(#accent)" stroke-width="4" stroke-linecap="round"
+        stroke-dasharray="340" stroke-dashoffset="340">
+    <animate attributeName="stroke-dashoffset" values="340;0;0;340" keyTimes="0;0.4;0.7;1" dur="5s" begin="0.8s" repeatCount="indefinite"/>
+  </line>
+
   <!-- Tagline -->
-  <text x="338" y="252" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="22" font-weight="400" fill="#8B949E" letter-spacing="4">
+  <text x="600" y="276" text-anchor="middle"
+        font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="22" font-weight="400" fill="#8B949E" letter-spacing="4">
     LOCAL YOUTUBE-TO-SHORTS PIPELINE
+    <animate attributeName="opacity" values="0.5;1;0.5" dur="5s" repeatCount="indefinite"/>
   </text>
 </svg>
