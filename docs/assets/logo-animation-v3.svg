@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="1200" height="360" role="img" aria-label="ClipAI">
+  <defs>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7C5CFF">
+        <animate attributeName="stop-color" values="#7C5CFF;#9B6CFF;#6E8BFF;#7C5CFF" dur="6s" repeatCount="indefinite"/>
+      </stop>
+      <stop offset="1" stop-color="#A855F7">
+        <animate attributeName="stop-color" values="#A855F7;#7C5CFF;#9B6CFF;#A855F7" dur="6s" repeatCount="indefinite"/>
+      </stop>
+    </linearGradient>
+
+    <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#C4B5FD"/>
+      <stop offset="0.5" stop-color="#A855F7"/>
+      <stop offset="1" stop-color="#7C5CFF"/>
+    </linearGradient>
+
+    <!-- Moving shimmer used to sweep across the wordmark -->
+    <linearGradient id="shimmer" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+      <animateTransform attributeName="gradientTransform" type="translate" values="-1 0;1 0" dur="3.5s" repeatCount="indefinite"/>
+    </linearGradient>
+
+    <!-- Electric glow -->
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <clipPath id="textClip">
+      <text x="612" y="190" text-anchor="middle"
+            font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="120" font-weight="600" letter-spacing="-2">ClipAI</text>
+    </clipPath>
+  </defs>
+
+  <!-- Solid background -->
+  <rect width="1200" height="360" fill="#0D1117"/>
+
+  <!-- Floating particles (looping) -->
+  <g fill="#7C5CFF">
+    <circle cx="220" cy="90" r="3" opacity="0.5">
+      <animate attributeName="cy" values="90;70;90" dur="5s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.2;0.7;0.2" dur="5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="980" cy="110" r="4" opacity="0.4">
+      <animate attributeName="cy" values="110;88;110" dur="6.5s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.15;0.6;0.15" dur="6.5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="330" cy="300" r="3" opacity="0.4">
+      <animate attributeName="cy" values="300;282;300" dur="7s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.1;0.5;0.1" dur="7s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="880" cy="290" r="3" opacity="0.5">
+      <animate attributeName="cy" values="290;272;290" dur="5.5s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.2;0.6;0.2" dur="5.5s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- Lightning bolt (logo mark) with electric flicker + glow -->
+  <g transform="translate(300,92)" filter="url(#glow)">
+    <!-- soft halo behind the bolt -->
+    <circle cx="36" cy="86" r="60" fill="#7C5CFF" opacity="0.0">
+      <animate attributeName="opacity" values="0.05;0.22;0.05" dur="2.4s" repeatCount="indefinite"/>
+      <animate attributeName="r" values="52;66;52" dur="2.4s" repeatCount="indefinite"/>
+    </circle>
+
+    <!-- the bolt itself, drawn in then flickering like electricity -->
+    <path d="M 50 0 L 8 96 L 40 96 L 24 176 L 78 64 L 44 64 Z"
+          fill="url(#bolt)" stroke="#E9D5FF" stroke-width="1.5" stroke-linejoin="round">
+      <animate attributeName="opacity"
+               values="0;1;0.65;1;0.8;1;0.55;1"
+               keyTimes="0;0.12;0.18;0.24;0.4;0.55;0.62;1"
+               dur="2.6s" repeatCount="indefinite"/>
+    </path>
+
+    <!-- bright flash overlay that fires periodically -->
+    <path d="M 50 0 L 8 96 L 40 96 L 24 176 L 78 64 L 44 64 Z" fill="#FFFFFF" opacity="0">
+      <animate attributeName="opacity" values="0;0;0.9;0;0;0.6;0" keyTimes="0;0.45;0.5;0.55;0.8;0.85;1" dur="3.8s" repeatCount="indefinite"/>
+    </path>
+
+    <!-- electric sparks -->
+    <g stroke="#C4B5FD" stroke-width="2" stroke-linecap="round">
+      <line x1="84" y1="40" x2="104" y2="28" opacity="0">
+        <animate attributeName="opacity" values="0;0;1;0;0" keyTimes="0;0.46;0.5;0.56;1" dur="3.8s" repeatCount="indefinite"/>
+      </line>
+      <line x1="0" y1="120" x2="-18" y2="132" opacity="0">
+        <animate attributeName="opacity" values="0;0;1;0;0" keyTimes="0;0.48;0.52;0.58;1" dur="3.8s" repeatCount="indefinite"/>
+      </line>
+      <line x1="70" y1="150" x2="92" y2="160" opacity="0">
+        <animate attributeName="opacity" values="0;0;1;0;0" keyTimes="0;0.8;0.84;0.9;1" dur="3.8s" repeatCount="indefinite"/>
+      </line>
+    </g>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="612" y="190" text-anchor="middle"
+        font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="120" font-weight="600" letter-spacing="-2">
+    <tspan fill="#E6EDF3">Clip</tspan><tspan fill="url(#accent)">AI</tspan>
+    <animate attributeName="opacity" values="0;1" dur="1s" fill="freeze"/>
+  </text>
+
+  <!-- Shimmer sweep clipped to the wordmark shape -->
+  <g clip-path="url(#textClip)">
+    <rect width="1200" height="360" fill="url(#shimmer)" opacity="0.6"/>
+  </g>
+
+  <!-- Animated underline sweep -->
+  <line x1="442" y1="224" x2="782" y2="224" stroke="#21262D" stroke-width="4" stroke-linecap="round"/>
+  <line x1="442" y1="224" x2="782" y2="224" stroke="url(#accent)" stroke-width="4" stroke-linecap="round"
+        stroke-dasharray="340" stroke-dashoffset="340">
+    <animate attributeName="stroke-dashoffset" values="340;0;0;340" keyTimes="0;0.4;0.7;1" dur="5s" begin="0.8s" repeatCount="indefinite"/>
+  </line>
+
+  <!-- Blinking pipeline dots -->
+  <g transform="translate(552,250)">
+    <circle cx="0"  cy="0" r="4" fill="#7C5CFF">
+      <animate attributeName="opacity" values="0.2;1;0.2" dur="1.8s" begin="0s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="20" cy="0" r="4" fill="#8A66FF">
+      <animate attributeName="opacity" values="0.2;1;0.2" dur="1.8s" begin="0.3s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="40" cy="0" r="4" fill="#9B6CFF">
+      <animate attributeName="opacity" values="0.2;1;0.2" dur="1.8s" begin="0.6s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="60" cy="0" r="4" fill="#A855F7">
+      <animate attributeName="opacity" values="0.2;1;0.2" dur="1.8s" begin="0.9s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- Tagline -->
+  <text x="612" y="306" text-anchor="middle"
+        font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="22" font-weight="400" fill="#8B949E" letter-spacing="4">
+    LOCAL YOUTUBE-TO-SHORTS PIPELINE
+    <animate attributeName="opacity" values="0.5;1;0.5" dur="5s" repeatCount="indefinite"/>
+  </text>
+</svg>
