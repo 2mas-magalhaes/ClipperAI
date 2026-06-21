@@ -38,18 +38,17 @@ You drop a URL into the queue, and a background worker handles the rest: it down
 
 <div align="center">
 
-### Watch the demo video
-
-<p><strong>This thumbnail is a clickable video — press play to watch ClipAI in action on YouTube.</strong></p>
-
 <a href="https://www.youtube.com/watch?v=O3AHu_EP7CM">
-  <img src="https://img.shields.io/badge/▶%20WATCH%20THE%20DEMO-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="Watch the demo on YouTube"/>
+  <img src="https://img.youtube.com/vi/O3AHu_EP7CM/maxresdefault.jpg" alt="Watch the ClipAI demo on YouTube" width="80%"/>
 </a>
 
+<br/>
 
-[![ClipAI demo video — click to play](https://img.youtube.com/vi/O3AHu_EP7CM/maxresdefault.jpg)](https://www.youtube.com/watch?v=O3AHu_EP7CM)
+<a href="https://www.youtube.com/watch?v=O3AHu_EP7CM">
+  <img src="https://img.shields.io/badge/Watch%20the%20demo-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="Watch the demo on YouTube"/>
+</a>
 
-<sub>▶ A full end-to-end walkthrough of ClipAI — click the thumbnail above to watch on YouTube.</sub>
+<p><sub>A full end-to-end walkthrough of ClipAI — click the thumbnail or button to watch on YouTube.</sub></p>
 
 </div>
 
