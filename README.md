@@ -15,6 +15,10 @@
   <img src="https://img.shields.io/badge/License-MIT-22C55E?style=for-the-badge" alt="MIT License"/>
 </p>
 
+<p>
+  <img src="https://readme-typing-svg.demolab.com?font=Segoe+UI&weight=600&size=22&duration=2800&pause=900&color=A855F7&center=true&vCenter=true&width=760&lines=Download.+Transcribe.+Analyze.+Edit.+Publish.;Local+LLM+picks+the+best+moments+with+Ollama.;Whisper+transcription%2C+vertical+9%3A16+editing.;No+cloud.+No+subscriptions.+100%25+local." alt="Animated tagline"/>
+</p>
+
 </div>
 
 ---
@@ -34,9 +38,19 @@ You drop a URL into the queue, and a background worker handles the rest: it down
 
 <div align="center">
 
-[![ClipAI demo video](https://img.youtube.com/vi/O3AHu_EP7CM/maxresdefault.jpg)](https://www.youtube.com/watch?v=O3AHu_EP7CM)
+### Watch the demo video
 
-<sub>A full end-to-end walkthrough of ClipAI.</sub>
+<p><strong>This thumbnail is a clickable video — press play to watch ClipAI in action on YouTube.</strong></p>
+
+<a href="https://www.youtube.com/watch?v=O3AHu_EP7CM">
+  <img src="https://img.shields.io/badge/▶%20WATCH%20THE%20DEMO-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="Watch the demo on YouTube"/>
+</a>
+
+<p>👇 &nbsp; <strong>Click the image below to play</strong> &nbsp; 👇</p>
+
+[![ClipAI demo video — click to play](https://img.youtube.com/vi/O3AHu_EP7CM/maxresdefault.jpg)](https://www.youtube.com/watch?v=O3AHu_EP7CM)
+
+<sub>▶ A full end-to-end walkthrough of ClipAI — click the thumbnail above to watch on YouTube.</sub>
 
 </div>
 
