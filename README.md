@@ -15,10 +15,6 @@
   <img src="https://img.shields.io/badge/License-MIT-22C55E?style=for-the-badge" alt="MIT License"/>
 </p>
 
-<p>
-  <img src="https://readme-typing-svg.demolab.com?font=Segoe+UI&size=22&duration=3000&pause=800&color=A78BFA&center=true&vCenter=true&width=720&lines=Download.+Transcribe.+Analyze.+Edit.+Publish.;No+cloud.+No+subscriptions.+No+data+leaving+your+machine.;Pick+the+best+moments+with+a+local+LLM.;Auto-scan+channels+and+publish+to+YouTube+Shorts." alt="Typing tagline"/>
-</p>
-
 </div>
 
 ---
@@ -40,7 +36,7 @@ You drop a URL into the queue, and a background worker handles the rest: it down
 
 [![ClipAI demo video](https://img.youtube.com/vi/O3AHu_EP7CM/maxresdefault.jpg)](https://www.youtube.com/watch?v=O3AHu_EP7CM)
 
-<sub>▶ A full end-to-end walkthrough of ClipAI.</sub>
+<sub>A full end-to-end walkthrough of ClipAI.</sub>
 
 </div>
 
@@ -69,16 +65,16 @@ YouTube URL → download → transcription (Whisper) → analysis (Ollama)
 
 ## Features
 
-- 🎬 **End-to-end pipeline** — from a single YouTube URL to a finished, captioned vertical clip.
-- 🧠 **Local LLM analysis** — Ollama picks the most viral moments; no cloud AI, no per-token cost.
-- 📝 **Whisper transcription** — accurate speech-to-text with optional GPU/CUDA acceleration.
-- 📐 **Vertical editing** — automatic 9:16 reframing with burned-in subtitles via FFmpeg/OpenCV.
-- 🤖 **Clippy hooks** — an animated character adds an AI-generated viral hook + natural TTS voice to each clip.
-- 👀 **Watched channels** — auto-scans source channels and queues fresh videos automatically.
-- 🗓️ **Scheduling** — spread uploads across the day with configurable frequency and day windows.
-- ✅ **Review before publish** — preview, multi-select, reject weak cuts, publish only the best.
-- 🔐 **Multi-channel publishing** — connect several YouTube channels via OAuth with credential rotation.
-- 📊 **Live dashboard** — counters, worker status, queue progress and published history at a glance.
+- **End-to-end pipeline** — from a single YouTube URL to a finished, captioned vertical clip.
+- **Local LLM analysis** — Ollama picks the most relevant moments; no cloud AI, no per-token cost.
+- **Whisper transcription** — accurate speech-to-text with optional GPU/CUDA acceleration.
+- **Vertical editing** — automatic 9:16 reframing with burned-in subtitles via FFmpeg/OpenCV.
+- **Intro hooks** — an optional character adds a generated hook and natural TTS voice to each clip.
+- **Watched channels** — auto-scans source channels and queues fresh videos automatically.
+- **Scheduling** — spread uploads across the day with configurable frequency and day windows.
+- **Review before publish** — preview, multi-select, reject weak cuts, publish only the best.
+- **Multi-channel publishing** — connect several YouTube channels via OAuth with credential rotation.
+- **Live dashboard** — counters, worker status, queue progress and published history at a glance.
 
 ---
 
