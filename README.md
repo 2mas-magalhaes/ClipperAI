@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/logo-animation.svg" alt="ClipAI" width="100%"/>
+<img src="docs/assets/logo-animation-v2.svg" alt="ClipAI" width="100%"/>
 
 <h1>ClipAI</h1>
 
